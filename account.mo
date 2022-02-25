@@ -7,8 +7,8 @@ import Text      "mo:base/Text";
 
 import CRC32     "./CRC32";
 import SHA224    "./SHA224";
-import Types     "./Types";
-import Utils     "./Utils";
+import Types     "./types";
+import Utils     "./utils";
 
 module {
     

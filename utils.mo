@@ -1,6 +1,9 @@
+import Array    "mo:base/Array";
+import Blob     "mo:base/Blob";
 import Nat8     "mo:base/Nat8";
 import Nat32    "mo:base/Nat32";
-import Types    "mo:base/Types";
+
+import Types    "./types";
 
 module {
 
@@ -13,19 +16,19 @@ module {
         Blob.fromArrayMut(Array.init(32, 0 : Nat8))
     };
 
-    public func natToBytes (nat : Nat) : [Nat8] {
-        func byte(n: Nat) : Nat8 {
-            Nat8.fromNat(nat);
-        };
-        [byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)];
+    public func natToBytes (n : Nat) : [Nat8] {
+        nat32ToBytes(Nat32.fromNat(n));
     };
 
-    public func nat32ToBytes (nat32 : Nat32) : [Nat8] {
-        natToBytes(Nat32.toNat(n & 0xff));
+    public func nat32ToBytes (n : Nat32) : [Nat8] {
+        func byte(n: Nat32) : Nat8 {
+            Nat8.fromNat(Nat32.toNat(n & 0xff))
+        };
+        [byte(n >> 24), byte(n >> 16), byte(n >> 8), byte(n)]
     };
 
     public func subToSubBlob (sub : Subaccount) : SubaccountBlob {
-        natToBytes(sub);
+        Blob.fromArray(natToBytes(sub));
     }
 
 }
