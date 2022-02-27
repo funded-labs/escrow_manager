@@ -3,14 +3,25 @@ import Blob     "mo:base/Blob";
 import Nat8     "mo:base/Nat8";
 import Nat32    "mo:base/Nat32";
 
+import Hex      "./Hex";
 import Types    "./types";
 
 module {
 
+    type AccountId = Types.AccountId;
+    type AccountIdText = Types.AccountIdText;
     type Subaccount = Types.Subaccount;
     type SubaccountBlob = Types.SubaccountBlob;
 
     // Account helpers 
+
+    public func accountIdToHex (a : AccountId) : AccountIdText {
+        Hex.encode(Blob.toArray(a));
+    };
+
+    public func hexToAccountId (h : AccountIdText) : AccountId {
+        Blob.fromArray(Hex.decode(h));
+    };    
 
     public func defaultSubaccount () : SubaccountBlob {
         Blob.fromArrayMut(Array.init(32, 0 : Nat8))

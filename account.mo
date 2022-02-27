@@ -28,7 +28,7 @@ module {
 
     public func validateAccountId (accountId : AccountId) : Bool {
         if (accountId.size() != 32) {
-        return false;
+            return false;
         };
         let a = Blob.toArray(accountId);
         let accIdPart    = Array.tabulate(28, func(i: Nat): Nat8 { a[i + 4] });
