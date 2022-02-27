@@ -205,22 +205,22 @@ actor class EscrowCanister(recipient: Principal, nftNumber : Nat, nftPriceE8S : 
                     };
                 };
             };
-            Debug.print("confirmedAccounts.size() " # Nat.toText(confirmedAccounts.size()));
+            // Debug.print("confirmedAccounts.size() " # Nat.toText(confirmedAccounts.size()));
             if (confirmedAccounts.size() > 0) {
                 // Check if funds have been recieved. After 2 minutes, subaccount status is changed to cancelled.
                 for (acc in Iter.fromArray(confirmedAccounts)) {
                     let accountIdText = acc.accountId;
                     let time = acc.time;
                     let accountId = Utils.hexToAccountId(accountIdText);
-                    Debug.print(accountIdText # " " # Int.toText(time));
+                    // Debug.print(accountIdText # " " # Int.toText(time));
                     switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo, accIdTextKey(accountIdText), Text.equal)) {
                         case (?pss) { 
-                            Debug.print("here");
+                            // Debug.print("here");
                             var balance : Nat64 = 0;
                             try {
                                 balance := (await accountBalance(accountId)).e8s;
                             } catch (e) { };
-                            Debug.print(Nat64.toText(balance) # " " # Nat64.toText(Nat64.fromNat(nftPriceE8S)));
+                            // Debug.print(Nat64.toText(balance) # " " # Nat64.toText(Nat64.fromNat(nftPriceE8S)));
                             if (balance >= Nat64.fromNat(nftPriceE8S)) {
                                 accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo, accIdTextKey(accountIdText), Text.equal, ?(pss.0, #funded, pss.2)).0;
                                 log({
