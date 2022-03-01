@@ -12,6 +12,7 @@ module {
     type AccountIdText = Types.AccountIdText;
     type Subaccount = Types.Subaccount;
     type SubaccountBlob = Types.SubaccountBlob;
+    type SubaccountNat8Arr = Types.SubaccountNat8Arr;
 
     // Account helpers 
 
@@ -39,7 +40,26 @@ module {
     };
 
     public func subToSubBlob (sub : Subaccount) : SubaccountBlob {
-        Blob.fromArray(natToBytes(sub));
-    }
+        let n_byte = func(i : Nat) : Nat8 {
+            assert(i < 32);
+            let shift : Nat = 8 * (32 - 1 - i);
+            Nat8.fromIntWrap(sub / 2**shift)
+        };
+        Blob.fromArray(Array.tabulate<Nat8>(32, n_byte))
+    };
+
+    public func subBlobToSubNat8Arr (sub : SubaccountBlob) : SubaccountNat8Arr {
+        let subZero : [var Nat8] = [var 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+        let subArray = Blob.toArray(sub);
+        let sizeDiff = subZero.size()-subArray.size();
+        var i = 0;
+        while (i < subZero.size()) {
+            if (i >= sizeDiff) {
+                subZero[i] := subArray[i - sizeDiff];
+            };
+            i += 1;
+        };
+        Array.freeze<Nat8>(subZero);
+    };
 
 }

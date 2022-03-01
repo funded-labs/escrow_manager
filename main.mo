@@ -19,7 +19,7 @@ actor EscrowManager {
 
     type AccountIdText  = Types.AccountIdText;
     type CanisterId     = Principal;
-    type ProjectId      = Nat;
+    type ProjectId      = Types.ProjectId;
     type ProjectIdText  = Text;
     type SubaccountBlob = Types.SubaccountBlob;
 
@@ -34,10 +34,10 @@ actor EscrowManager {
     public shared(msg) func createEscrowCanister (p: ProjectId, recipient: Principal, nftNumber: Nat, nftPriceE8S : Nat, endTime : Time.Time) : async () {
         assert(msg.caller == admin);
         switch (getProjectEscrowCanister(p)) {
-            case (?canister) { };
+            case (?canister) { throw Error.reject("Project already has an escrow canister: " # Principal.toText(canister)); };
             case (null) {
                 Cycles.add(1000000000000);
-                let canister = await Escrow.EscrowCanister(recipient, nftNumber, nftPriceE8S, endTime);
+                let canister = await Escrow.EscrowCanister(p, recipient, nftNumber, nftPriceE8S, endTime);
                 escrowCanisters := Trie.putFresh<ProjectIdText, CanisterId>(escrowCanisters, projectIdKey(p), Text.equal, Principal.fromActor(canister));
             };
         };
@@ -128,6 +128,26 @@ actor EscrowManager {
 
     func projectIdKey (p: ProjectId) : Trie.Key<ProjectIdText> {
         { key = Nat.toText(p); hash = Text.hash(Nat.toText(p)) };
+    };
+
+    // cycles management
+
+    //Internal cycle management - good general case
+    type RecieveOptions = {
+        memo: ?Text;
+    };
+    public func wallet_receive() : async () {
+        let available = Cycles.available();
+        let accepted = Cycles.accept(available);
+        assert (accepted == available);
+    };
+    public func acceptCycles() : async () {
+        let available = Cycles.available();
+        let accepted = Cycles.accept(available);
+        assert (accepted == available);
+    };
+    public query func availableCycles() : async Nat {
+        return Cycles.balance();
     };
 
 }

@@ -5,6 +5,7 @@ module {
     public type AccountId           = Blob;
     public type AccountIdText       = Text;
     public type Subaccount          = Nat;
+    public type SubaccountNat8Arr   = [Nat8];
     public type SubaccountBlob      = Blob;
     public type SubaccountStatus    = { 
         #empty;     // empty and waiting for a transfer
@@ -14,15 +15,24 @@ module {
         #funded;    // funds recieved
     };
 
+    // PROJECT
+
+    public type ProjectId = Nat;
+    public type ProjectStatus = { 
+        #whitelist;
+        #live;
+        #fully_funded;
+    };
+
     // LEDGER
-    public type AccountBalanceArgs  = { account : AccountId };
+    public type AccountBalanceArgs  = { account : AccountIdText };
     public type ICPTs               = { e8s     : Nat64     };
     public type SendArgs            = {
         memo            : Nat64;
         amount          : ICPTs;
         fee             : ICPTs;
-        from_subaccount : ?SubaccountBlob;
-        to              : AccountId;
+        from_subaccount : ?SubaccountNat8Arr;
+        to              : AccountIdText;
         created_at_time : ?Time.Time;
     };
 
