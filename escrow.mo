@@ -26,9 +26,25 @@ import Hex          "./hex";
 import Types        "./types";
 import Utils        "./utils";
 
-actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nftNumber : Nat, nftPriceE8S : Nat, endTime : Time.Time) = this {
+actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nftNumber : Nat, nftPriceE8S : Nat, endTime : Time.Time, canBuyMultiple : Bool) = this {
 
     stable var nextSubAccount : Nat = 1_000_000_000;
+
+    public query func getMetadata () : async ({
+        projectId : Types.ProjectId;
+        recipient : Principal;
+        nftNumber : Nat;
+        nftPriceE8S : Nat;
+        endTime : Time.Time;
+    }) {
+        return {
+            projectId = projectId;
+            recipient = recipient;
+            nftNumber = nftNumber;
+            nftPriceE8S = nftPriceE8S;
+            endTime = endTime;
+        };
+    };
 
     // CONSTS
     let FEE : Nat64 = 10_000;
@@ -70,37 +86,122 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         accountId   : AccountIdText;
         time        : Time.Time;
     };
-    stable var emptyAccounts : [AccountIdAndTime] = [];
-    stable var confirmedAccounts : [AccountIdAndTime] = [];
+    var emptyAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
+    var confirmedAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
+    var cancelledThenConfirmedAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
+    stable var _emptyAccounts : [AccountIdAndTime] = [];
+    stable var _confirmedAccounts : [AccountIdAndTime] = [];
+    stable var _cancelledThenConfirmedAccounts : [AccountIdAndTime] = [];
+
+    public query func getConfirmedAccountsArray () : async [AccountIdAndTime] {
+        confirmedAccounts.toArray();
+    };
+
+    public func addConfirmedAccountsToConfirmedAccountsArray () : async () {
+        let newConfirmedAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
+        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo)) {
+            let accountIdText = kv.0;
+            let status = kv.1.1;
+            if (status == #confirmed) {
+                newConfirmedAccounts.add({ accountId = accountIdText; time = Time.now() });
+            };
+        };
+        confirmedAccounts := newConfirmedAccounts;
+    };
 
     // DISBURSEMENTS
 
     type APS = (AccountIdText, Principal, SubaccountBlob);
-    private stable var disbursements : [TransferRequest] = [];
+
+    private var disbursements : Buffer.Buffer<TransferRequest> = Buffer.Buffer<TransferRequest>(1);
+    private var subaccountsToDrain : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
+    private var subaccountsToRefund : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
+
+    private stable var _disbursements : [TransferRequest] = [];
     private stable var disbursementToDisburse : Nat = 0;
-    private stable var subaccountsToDrain : [APS] = [];
+    private stable var _subaccountsToDrain : [APS] = [];
     private stable var subaccountToDrain : Nat = 0;
-    private stable var subaccountsToRefund : [APS] = [];
+    private stable var _subaccountsToRefund : [APS] = [];
     private stable var subaccountToRefund : Nat = 0;
     private stable var hasStartedDrainingAccounts : Bool = false;
     private stable var hasPaidOut : Bool = false;
 
     private func addDisbursements(transferRequests : [TransferRequest]) : () {
-        disbursements := Array.append<TransferRequest>(disbursements, transferRequests);
+        for (tr in Iter.fromArray(transferRequests)) {
+            disbursements.add(tr);
+        };
+    };
+
+    system func preupgrade() {
+        _emptyAccounts := emptyAccounts.toArray();
+        _confirmedAccounts := confirmedAccounts.toArray();
+        _cancelledThenConfirmedAccounts := cancelledThenConfirmedAccounts.toArray();
+        _disbursements := disbursements.toArray();
+        _subaccountsToDrain := subaccountsToDrain.toArray();
+        _subaccountsToRefund := subaccountsToRefund.toArray();
+    };
+    stable var previousHeartbeatDone = true;
+    system func postupgrade() {
+        previousHeartbeatDone := true;
+        emptyAccounts := Buffer.Buffer<AccountIdAndTime>(1);
+        confirmedAccounts := Buffer.Buffer<AccountIdAndTime>(1);
+        cancelledThenConfirmedAccounts := Buffer.Buffer<AccountIdAndTime>(1);
+        disbursements := Buffer.Buffer<TransferRequest>(1);
+        subaccountsToDrain := Buffer.Buffer<APS>(1);
+        subaccountsToRefund := Buffer.Buffer<APS>(1);
+        for (accountIdAndTime in Iter.fromArray(_emptyAccounts)) {
+            emptyAccounts.add(accountIdAndTime);
+        };
+        for (accountIdAndTime in Iter.fromArray(_confirmedAccounts)) {
+            confirmedAccounts.add(accountIdAndTime);
+        };
+        for (accountIdAndTime in Iter.fromArray(_cancelledThenConfirmedAccounts)) {
+            cancelledThenConfirmedAccounts.add(accountIdAndTime);
+        };
+        for (tr in Iter.fromArray(_disbursements)) {
+            disbursements.add(tr);
+        };
+        for (aps in Iter.fromArray(_subaccountsToDrain)) {
+            subaccountsToDrain.add(aps);
+        };
+        for (aps in Iter.fromArray(_subaccountsToRefund)) {
+            subaccountsToRefund.add(aps);
+        };
+        _emptyAccounts := [];
+        _confirmedAccounts := [];
+        _cancelledThenConfirmedAccounts := [];
+        _disbursements := [];
+        _subaccountsToDrain := [];
+        _subaccountsToRefund := [];
     };
 
     // SUBACCOUNTS
 
-    public func getNewAccountId (principal: Principal) : async AccountIdText {
-        if (getNumberOfUncancelledSubaccounts() >= nftNumber) throw Error.reject("Not enough subaccounts.");
-        if (endTime * 1_000_000 < Time.now()) throw Error.reject("Project is past crowdfund close date.");
-        if (principalHasUncancelledSubaccount(principal)) throw Error.reject("Principal already has an uncancelled subaccount.");
+    stable var projectState : ProjectState = #closed;
+    public query func getProjectState() : async ProjectState {
+        projectState;
+    };
+    public func updateProjectState () : async ProjectState {
+        projectState := await Backend.getProjectState(Nat.toText(projectId));
+        projectState;
+    };
+    let CNFT_NFT_Canister = actor "2glp2-eqaaa-aaaak-aajoa-cai" : actor { 
+        principalOwnsOne : shared Principal -> async Bool;
+    };
+
+    public func getNewAccountId (principal: Principal) : async Result.Result<AccountIdText, Text> {
+        if (getNumberOfUncancelledSubaccounts() >= nftNumber) return #err("Project is fully funded (or almost there, so we are pausing new transfers for the time being).");
+        if (endTime * 1_000_000 < Time.now()) return #err("Project is past crowdfund close date.");
+        if (canBuyMultiple == false and principalHasUncancelledSubaccount(principal)) return #err("Your wallet has already funded or is currently funding this project.");
         func isEqPrincipal (p: Principal) : Bool { p == principal }; 
-        switch ((await Backend.getProjectState(Nat.toText(projectId))) : ProjectState) {
+        switch (projectState) {
             case (#whitelist(whitelist)) {
-                if (Array.filter<Principal>(whitelist, isEqPrincipal).size() == 0) throw Error.reject("Principal is not on whitelist.");
+                if (
+                    Array.filter<Principal>(whitelist, isEqPrincipal).size() == 0
+                    and (await CNFT_NFT_Canister.principalOwnsOne(principal)) == false
+                ) return #err("Principal is not on whitelist.");
             }; case (#closed) {
-                throw Error.reject("Project is not open to funding.");
+                return #err("Project is not open to funding.");
             }; case _ {};
         };
         let subaccount = nextSubAccount;
@@ -108,8 +209,12 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         let subaccountBlob : SubaccountBlob = Utils.subToSubBlob(subaccount);
         let accountIdText = Utils.accountIdToHex(Account.getAccountId(getPrincipal(), subaccountBlob));
         accountInfo := Trie.putFresh<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo, accIdTextKey(accountIdText), Text.equal, (principal, #empty, subaccountBlob));
-        emptyAccounts := Array.append<AccountIdAndTime>(emptyAccounts, [{ accountId = accountIdText; time = Time.now() }]);
-        return accountIdText;
+        emptyAccounts.add({ accountId = accountIdText; time = Time.now() });
+        return #ok(accountIdText);
+    };
+    public func testHasCNFT (principal: Principal) : async Bool {
+        if (await CNFT_NFT_Canister.principalOwnsOne(principal)) return true;
+        return false;
     };
 
     // RELEASE FUNDS TO PROJECT CREATOR
@@ -120,8 +225,8 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
 
         let defaultAccountId = Account.getAccountId(getPrincipal(), Utils.defaultSubaccount());
 
-        var _subaccountsToDrain : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
-        var _subaccountsToRefund : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
+        var newSubaccountsToDrain : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
+        var newSubaccountsToRefund : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
 
         for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo)) {
             let accountIdText = kv.0;
@@ -130,14 +235,24 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             let subBlob = kv.1.2;
 
             if (status == #funded) {
-                _subaccountsToDrain.add((accountIdText, principal, subBlob));
+                newSubaccountsToDrain.add((accountIdText, principal, subBlob));
             } else { // there should be no funds in subaccount, but just in case, we return it to backer
-                _subaccountsToRefund.add((accountIdText, principal, subBlob));
+                newSubaccountsToRefund.add((accountIdText, principal, subBlob));
             };
         };
 
-        subaccountsToDrain := _subaccountsToDrain.toArray();
-        subaccountsToRefund := _subaccountsToRefund.toArray();
+        subaccountsToDrain := newSubaccountsToDrain;
+        subaccountsToRefund := newSubaccountsToRefund;
+    };
+
+    public query func getSubaccountsInfo () : async ({ 
+        toDrain : { index : Nat; count : Nat; arr : [APS] };
+        toRefund : { index : Nat; count : Nat; arr : [APS] };
+    }) {
+        { 
+            toDrain = { index = subaccountToDrain; count = subaccountsToDrain.size(); arr = subaccountsToDrain.toArray();};
+            toRefund = { index = subaccountToRefund; count = subaccountsToRefund.size(); arr = subaccountsToRefund.toArray(); };
+        };
     };
 
     // REFUND BACKERS
@@ -145,31 +260,38 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     public func returnFunds () : async () {
         assert(endTime * 1_000_000 < Time.now() and projectIsFullyFunded() == false);
 
-        var _subaccountsToRefund : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
+        var newSubaccountsToRefund : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
 
         for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo)) {
             let accountIdText = kv.0;
             let principal = kv.1.0;
             let subBlob = kv.1.2;
-            _subaccountsToRefund.add((accountIdText, principal, subBlob));
+            newSubaccountsToRefund.add((accountIdText, principal, subBlob));
         };
 
-        subaccountsToRefund := _subaccountsToRefund.toArray();
+        subaccountsToRefund := newSubaccountsToRefund;
     };
 
     // CONFIRM/CANCEL TRANSFER
 
-    public func confirmTransfer(a : AccountIdText) : async () {
+    let emptyAccountCutOff = 2; // minutes
+    public func confirmTransfer(a : AccountIdText) : async Result.Result<(), Text> {
         switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo, accIdTextKey(a), Text.equal)) {
             case (?pss) { 
                 if (pss.1 == #empty) {
                     accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo, accIdTextKey(a), Text.equal, ?(pss.0, #confirmed, pss.2)).0;
-                    confirmedAccounts := Array.append<AccountIdAndTime>(confirmedAccounts, [{ accountId = a; time = Time.now(); }]);
+                    confirmedAccounts.add({ accountId = a; time = Time.now(); });
+                    return #ok();
                 } else {
-                    throw Error.reject("Account is not in empty state.");
+                    if (pss.1 == #confirmed) {
+                        return #err("This transfer has already been confirmed.");
+                    } else {
+                        cancelledThenConfirmedAccounts.add({ accountId = a; time = Time.now(); });
+                        return #err("You took longer than " # Nat.toText(emptyAccountCutOff) # " minutes to transfer the funds. In order to make sure that crowdfunding projects don't get 'frozen' by people who click the crowdfund button but don't transfer quickly, we don't accept transfers past this cutoff. You will be refunded within the next few minutes, and if the project is not yet fully funded, you can attempt to fund it again. Thank you for your understanding.");
+                    };
                 };
             };
-            case null { throw Error.reject("Account not found."); };
+            case null { return #err("Account not found."); };
         };
     };
 
@@ -186,12 +308,13 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         }; 
     };
 
-    stable var previousHeartbeatDone = true;
+    
     system func heartbeat() : async () {
         if (previousHeartbeatDone == false) return;
         previousHeartbeatDone := false;
         if (emptyAccounts.size() > 0) await cancelOpenAccountIds();
         if (confirmedAccounts.size() > 0) await checkConfirmedAccountsForFunds();
+        if (cancelledThenConfirmedAccounts.size() > 0) await checkCancelledThenConfirmedAccountsForRefund();
         if (subaccountToDrain < subaccountsToDrain.size()) await drainOneSubaccount();
         if (subaccountToRefund < subaccountsToRefund.size()) await refundOneSubaccount();
         if (disbursementToDisburse < disbursements.size()) await executeOneDisbursement();
@@ -206,7 +329,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         let cutoff = Time.now() - 1_000_000_000 * 60 * 2;
         let newEmptyAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
         // If an account hasn't recieved a confirmation or cancellation, after 2 minutes it is set to cancelled.
-        for (acc in Iter.fromArray(emptyAccounts)) {
+        for (acc in emptyAccounts.vals()) {
             let accountIdText = acc.accountId;
             let time = acc.time;
             if (time < cutoff) {
@@ -222,7 +345,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 newEmptyAccounts.add(acc);
             };
         };
-        emptyAccounts := newEmptyAccounts.toArray();
+        emptyAccounts := newEmptyAccounts;
     };
 
     func checkConfirmedAccountsForFunds() : async () {
@@ -230,7 +353,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         let cutoff = Time.now() - 1_000_000_000 * 60 * 2;
         let newConfirmedAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
         // If an account hasn't recieved a confirmation or cancellation, after 2 minutes it is set to cancelled.
-        for (acc in Iter.fromArray(confirmedAccounts)) {
+        for (acc in confirmedAccounts.vals()) {
             let accountIdText = acc.accountId;
             let time = acc.time;
             switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo, accIdTextKey(accountIdText), Text.equal)) {
@@ -261,12 +384,44 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 case null { };
             };
         };
-        confirmedAccounts := newConfirmedAccounts.toArray();
+        confirmedAccounts := newConfirmedAccounts;
+    };
+
+    func checkCancelledThenConfirmedAccountsForRefund() : async () {
+        if (cancelledThenConfirmedAccounts.size() == 0) return;
+        let cutoff = Time.now() - 1_000_000_000 * 60 * 5; // 5 minutes
+        let newCancelledThenConfirmedAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
+        for (acc in cancelledThenConfirmedAccounts.vals()) {
+            let accountIdText = acc.accountId;
+            let time = acc.time;
+            switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo, accIdTextKey(accountIdText), Text.equal)) {
+                case (?pss) { 
+                    var balance : Nat64 = 0;
+                    try {
+                        balance := (await accountBalance(accountIdText)).e8s;
+                    } catch (e) { };
+                    if (balance >= Nat64.fromNat(nftPriceE8S)) {
+                        addDisbursements([{
+                            info = "refund from non-#funded account";
+                            from = ?Utils.subBlobToSubNat8Arr(pss.2); 
+                            to = Utils.accountIdToHex(Account.getAccountId(pss.0, Utils.defaultSubaccount()));
+                            amount = { e8s = balance - FEE };
+                        }]);
+                    } else {
+                        if (time < cutoff) {
+                            newCancelledThenConfirmedAccounts.add(acc);
+                        };
+                    };
+                };
+                case null { };
+            };
+        };
+        cancelledThenConfirmedAccounts := newCancelledThenConfirmedAccounts;
     };
 
     func executeOneDisbursement() : async () {
         if (disbursementToDisburse >= disbursements.size()) return;
-        let d = disbursements[disbursementToDisburse];
+        let d = disbursements.get(disbursementToDisburse);
         disbursementToDisburse += 1;
         switch (await transfer(d)) {
             case (#ok(nat)) { }; case (#err(err)) { 
@@ -278,7 +433,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     func drainOneSubaccount () : async () {
         hasStartedDrainingAccounts := true;
         if (subaccountToDrain >= subaccountsToDrain.size()) return;
-        let s = subaccountsToDrain[subaccountToDrain];
+        let s = subaccountsToDrain.get(subaccountToDrain);
         subaccountToDrain += 1;
         let accountIdText = s.0;
         let subBlob = s.2; 
@@ -296,7 +451,8 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
 
     func refundOneSubaccount () : async () {
         if (subaccountToRefund >= subaccountsToRefund.size()) return;
-        let s = subaccountsToRefund[subaccountToRefund];
+        let s = subaccountsToRefund.get(subaccountToRefund);
+        subaccountToRefund += 1;
         let accountIdText = s.0;
         let principal = s.1;
         let subBlob = s.2; 
@@ -455,7 +611,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     public query func getDisbursements () : async Text { 
         var str : Text = "index, info, from, to, amount\n";
         var i = 0;
-        for (d in Iter.fromArray(disbursements)) {
+        for (d in disbursements.vals()) {
             var fromStr = "null";
             switch (d.from) {
                 case (?f) { fromStr := Utils.accountIdToHex(Blob.fromArray(f)); };
@@ -500,7 +656,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 count += 1;
             };
         };
-        return count == nftNumber;
+        return count >= nftNumber;
     };
 
     func accIdTextKey(s : AccountIdText) : Trie.Key<AccountIdText> {
