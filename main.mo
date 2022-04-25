@@ -34,6 +34,13 @@ actor EscrowManager {
         memory_allocation : Nat;
         freezing_threshold : Nat;
     };
+
+    // We want to eventually make all escrow canister "black hole" canisters,
+    // which means they have no controllers, and hence their code cannot be
+    // altered. Until then, since we have at times had to update an escrow
+    // canister's code due to a glitch, we use this function to temporarily take
+    // control of the escrow canister.
+    // TODO: Remove this function.
     public func test () : async definite_canister_settings { 
         let ManagementCanister = actor "aaaaa-aa" : actor {
             canister_status : shared { canister_id : canister_id } -> async {
@@ -48,7 +55,7 @@ actor EscrowManager {
                 settings : canister_settings
             } -> async ();
         };
-        let canister_id = Principal.fromText("enkh4-3iaaa-aaaak-aalcq-cai");
+        let canister_id = Principal.fromText("f7xab-3yaaa-aaaak-aam2a-cai");
         let newControllers = [
             Principal.fromText("3fhg4-qiaaa-aaaak-aajiq-cai"),
             Principal.fromText("xohn2-daaaa-aaaak-aadvq-cai") 
@@ -80,6 +87,7 @@ actor EscrowManager {
         };
     };
 
+    // TODO: Remove self as controller of created escrow canister to turn the canister into true "black hole" canister.
     public shared(msg) func createEscrowCanister (p: ProjectId, recipient: Principal, nftNumber: Nat, nftPriceE8S : Nat, endTime : Time.Time, maxNFTsPerWallet : Nat) : async () {
         assert(msg.caller == admin);
         switch (getProjectEscrowCanister(p)) {
