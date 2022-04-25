@@ -80,13 +80,13 @@ actor EscrowManager {
         };
     };
 
-    public shared(msg) func createEscrowCanister (p: ProjectId, recipient: Principal, nftNumber: Nat, nftPriceE8S : Nat, endTime : Time.Time, canBuyMultiple : Bool) : async () {
+    public shared(msg) func createEscrowCanister (p: ProjectId, recipient: Principal, nftNumber: Nat, nftPriceE8S : Nat, endTime : Time.Time, maxNFTsPerWallet : Nat) : async () {
         assert(msg.caller == admin);
         switch (getProjectEscrowCanister(p)) {
             case (?canister) { throw Error.reject("Project already has an escrow canister: " # Principal.toText(canister)); };
             case (null) {
                 Cycles.add(1000000000000);
-                let canister = await Escrow.EscrowCanister(p, recipient, nftNumber, nftPriceE8S, endTime, canBuyMultiple);
+                let canister = await Escrow.EscrowCanister(p, recipient, nftNumber, nftPriceE8S, endTime, maxNFTsPerWallet);
                 escrowCanisters := Trie.putFresh<ProjectIdText, CanisterId>(escrowCanisters, projectIdKey(p), Text.equal, Principal.fromActor(canister));
             };
         };

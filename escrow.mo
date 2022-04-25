@@ -26,7 +26,7 @@ import Hex          "./hex";
 import Types        "./types";
 import Utils        "./utils";
 
-actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nftNumber : Nat, nftPriceE8S : Nat, endTime : Time.Time, canBuyMultiple : Bool) = this {
+actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nftNumber : Nat, nftPriceE8S : Nat, endTime : Time.Time, maxNFTsPerWallet : Nat) = this {
 
     stable var nextSubAccount : Nat = 1_000_000_000;
 
@@ -36,6 +36,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         nftNumber : Nat;
         nftPriceE8S : Nat;
         endTime : Time.Time;
+        maxNFTsPerWallet : Nat;
     }) {
         return {
             projectId = projectId;
@@ -43,6 +44,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             nftNumber = nftNumber;
             nftPriceE8S = nftPriceE8S;
             endTime = endTime;
+            maxNFTsPerWallet = maxNFTsPerWallet;
         };
     };
 
@@ -192,7 +194,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     public func getNewAccountId (principal: Principal) : async Result.Result<AccountIdText, Text> {
         if (getNumberOfUncancelledSubaccounts() >= nftNumber) return #err("Project is fully funded (or almost there, so we are pausing new transfers for the time being).");
         if (endTime * 1_000_000 < Time.now()) return #err("Project is past crowdfund close date.");
-        if (canBuyMultiple == false and principalHasUncancelledSubaccount(principal)) return #err("Your wallet has already funded or is currently funding this project.");
+        if (maxNFTsPerWallet > 0 and principalNumSubaccounts(principal) >= maxNFTsPerWallet) return #err("This project only allows each wallet to back the project " # Nat.toText(maxNFTsPerWallet) # " times. You have already attained this maximum.");
         func isEqPrincipal (p: Principal) : Bool { p == principal }; 
         switch (projectState) {
             case (#whitelist(whitelist)) {
@@ -647,6 +649,15 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             };
         }; 
         return false;
+    };
+    func principalNumSubaccounts (p : Principal) : Nat {
+        var count : Nat = 0;
+        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo)) {
+            if (ss.1.0 == p and ss.1.1 != #cancelled) {
+                count += 1;
+            };
+        };
+        count;
     };
 
     func projectIsFullyFunded () : Bool { 
