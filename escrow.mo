@@ -310,7 +310,13 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         }; 
     };
 
-    
+    public query func getPreviousHeartbeatDone () : async Bool {
+        previousHeartbeatDone;
+    };
+    public func resetHeartbeat () : async () {
+        previousHeartbeatDone := true;
+    };
+
     system func heartbeat() : async () {
         if (previousHeartbeatDone == false) return;
         previousHeartbeatDone := false;
