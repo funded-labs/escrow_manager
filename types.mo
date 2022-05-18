@@ -2,6 +2,11 @@ import Time "mo:base/Time";
 
 module {
 
+    public type NFTInfo = {
+        number      : Nat;
+        priceE8S    : Nat;
+    }
+
     public type AccountId           = Blob;
     public type AccountIdText       = Text;
     public type Subaccount          = Nat;

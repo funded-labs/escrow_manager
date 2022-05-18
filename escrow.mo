@@ -26,27 +26,9 @@ import Hex          "./hex";
 import Types        "./types";
 import Utils        "./utils";
 
-actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nftNumber : Nat, nftPriceE8S : Nat, endTime : Time.Time, maxNFTsPerWallet : Nat) = this {
+actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nfts: [Types.NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat) = this {
 
     stable var nextSubAccount : Nat = 1_000_000_000;
-
-    public query func getMetadata () : async ({
-        projectId : Types.ProjectId;
-        recipient : Principal;
-        nftNumber : Nat;
-        nftPriceE8S : Nat;
-        endTime : Time.Time;
-        maxNFTsPerWallet : Nat;
-    }) {
-        return {
-            projectId = projectId;
-            recipient = recipient;
-            nftNumber = nftNumber;
-            nftPriceE8S = nftPriceE8S;
-            endTime = endTime;
-            maxNFTsPerWallet = maxNFTsPerWallet;
-        };
-    };
 
     // CONSTS
     let FEE : Nat64 = 10_000;
@@ -55,10 +37,27 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     type AccountId = Types.AccountId; // Blob
     type AccountIdText = Types.AccountIdText;
     type ProjectId = Types.ProjectId; // Nat
+    type NFTInfo = Types.NFTInfo;
     type Subaccount = Types.Subaccount; // Nat
     type SubaccountBlob = Types.SubaccountBlob;
     type SubaccountNat8Arr = Types.SubaccountNat8Arr;
     type SubaccountStatus = Types.SubaccountStatus;
+
+    public query func getMetadata () : async ({
+        projectId : ProjectId;
+        recipient : Principal;
+        nfts: [NFTInfo];
+        endTime : Time.Time;
+        maxNFTsPerWallet : Nat;
+    }) {
+        return {
+            projectId = projectId;
+            recipient = recipient;
+            nfts = nfts;
+            endTime = endTime;
+            maxNFTsPerWallet = maxNFTsPerWallet;
+        };
+    };
 
     // BACKEND
     type ProjectIdText = Text;
@@ -81,7 +80,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         account_balance_dfx : shared query AccountBalanceArgs -> async ICPTs; 
     };
 
-    stable var accountInfo : Trie.Trie<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)> = Trie.empty();
+    stable var accountInfo : Trie.Trie<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)> = Trie.empty();
     stable var logsCSV : Text = "time, info, isIncoming, from, to, amount, blockHeight, worked\n";
 
     type AccountIdAndTime = {
