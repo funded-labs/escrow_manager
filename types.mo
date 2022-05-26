@@ -42,12 +42,15 @@ module {
     };
 
     // ESCROW STATS
-    public type EscrowStats         = {
-        nftNumber       : Nat;
-        nftPriceE8S     : Nat;
-        endTime         : Time.Time;
-        nftsSold        : Nat;
+    public type NFTStats = {
+        number          : Nat;
+        priceE8S        : Nat;
+        sold            : Nat;
         openSubaccounts : Nat;
+    }
+    public type EscrowStats         = {
+        endTime     : Time.Time;
+        nftStats    : [NFTStats];
     };
 
 };
