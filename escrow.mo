@@ -101,7 +101,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
 
     public func addConfirmedAccountsToConfirmedAccountsArray () : async () {
         let newConfirmedAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
-        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob)>(accountInfo)) {
+        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
             let accountIdText = kv.0;
             let status = kv.1.1;
             if (status == #confirmed) {
@@ -192,7 +192,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     };
 
     public func getNewAccountId (principal: Principal, tier: NFTInfoIndex) : async Result.Result<AccountIdText, Text> {
-        if (getNumberOfUncancelledSubaccounts(nftNumber) >= nfts[tier].number) return #err("This project or project tier is fully funded (or almost there, so we are pausing new transfers for the time being).");
+        if (getNumberOfUncancelledSubaccounts(tier) >= nfts[tier].number) return #err("This project or project tier is fully funded (or almost there, so we are pausing new transfers for the time being).");
         if (endTime * 1_000_000 < Time.now()) return #err("Project is past crowdfund close date.");
         if (maxNFTsPerWallet > 0 and principalNumSubaccounts(principal) >= maxNFTsPerWallet) return #err("This project only allows each wallet to back the project " # Nat.toText(maxNFTsPerWallet) # " times. You have already attained this maximum.");
         func isEqPrincipal (p: Principal) : Bool { p == principal }; 
@@ -360,7 +360,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                     try {
                         balance := (await accountBalance(accountIdText)).e8s;
                     } catch (e) { };
-                    if (balance >= Nat64.fromNat(nfts[pssi.3].1)) {
+                    if (balance >= Nat64.fromNat(nfts[pssi.3].priceE8S)) {
                         accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(accountIdText), Text.equal, ?(pssi.0, #funded, pssi.2, pssi.3)).0;
                         log({
                             info = "transfer into the escrow";
@@ -401,8 +401,8 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                     if (balance >= FEE) {
                         addDisbursements([{
                             info = "refund from non-#funded account";
-                            from = ?Utils.subBlobToSubNat8Arr(pss.2); 
-                            to = Utils.accountIdToHex(Account.getAccountId(pss.0, Utils.defaultSubaccount()));
+                            from = ?Utils.subBlobToSubNat8Arr(pssi.2); 
+                            to = Utils.accountIdToHex(Account.getAccountId(pssi.0, Utils.defaultSubaccount()));
                             amount = { e8s = balance - FEE };
                         }]);
                     } else {
@@ -470,9 +470,9 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         hasPaidOut := true;
         let defaultAccountIdHex = Utils.accountIdToHex(Account.getAccountId(getPrincipal(), Utils.defaultSubaccount()));
         let recipientAccountIdHex = Utils.accountIdToHex(Account.getAccountId(recipient, Utils.defaultSubaccount()));
-        let expectedPayout = Nat64.fromNat(0)
-        for (tier in nfts) {
-            expectedPayout += Nat64.fromNat(Int.abs(Float.toInt(Float.fromInt(tier.0) * Float.fromInt(tier.1) * 0.95))); // We take a 5% cut.
+        var expectedPayout = Nat64.fromNat(0);
+        for (tier in Iter.fromArray<NFTInfo>(nfts)) {
+            expectedPayout += Nat64.fromNat(Int.abs(Float.toInt(Float.fromInt(tier.number) * Float.fromInt(tier.priceE8S) * 0.95))); // We take a 5% cut.
         };
         let total = (await accountBalance(defaultAccountIdHex)).e8s;
         var payout = expectedPayout;
@@ -549,11 +549,11 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     type NFTStats = Types.NFTStats;
     type EscrowStats = Types.EscrowStats;
     public query func getStats () : async EscrowStats {
-        var nftStats = Buffer.Buffer<NFTStats> = Buffer.Buffer<NFTStats>(1);
-        for (t in nfts) {
-            nftStats.push({
-                number = t.0;
-                priceE8S = t.1;
+        var nftStats = Buffer.Buffer<NFTStats>(1);
+        for (t in Iter.fromArray<NFTInfo>(nfts)) {
+            nftStats.add({
+                number = t.number;
+                priceE8S = t.priceE8S;
                 sold = 0;
                 openSubaccounts = 0;
             });
@@ -562,27 +562,27 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             let status = ss.1.1;
             let nftInfoIndex = ss.1.3;
             if (status == #funded) {
-                curStats = nftStats.get(nftInfoIndex);
+                let curStats = nftStats.get(nftInfoIndex);
                 nftStats.put(nftInfoIndex, { 
-                    number = curStats.0;
-                    priceE8S = curStats.1;
-                    sold = curStats.2 + 1;
-                    openSubaccounts = curStats.3; 
+                    number = curStats.number;
+                    priceE8S = curStats.priceE8S;
+                    sold = curStats.sold + 1;
+                    openSubaccounts = curStats.openSubaccounts; 
                 });
             };
             if (status == #empty or status == #confirmed) {
-                curStats = nftStats.get(nftInfoIndex);
+                let curStats = nftStats.get(nftInfoIndex);
                 nftStats.put(nftInfoIndex, { 
-                    number = curStats.0;
-                    priceE8S = curStats.1;
-                    sold = curStats.2;
-                    openSubaccounts = curStats.3 + 1; 
+                    number = curStats.number;
+                    priceE8S = curStats.priceE8S;
+                    sold = curStats.sold;
+                    openSubaccounts = curStats.openSubaccounts + 1; 
                 });
             };
         };
         { 
             endTime  = endTime;
-            nftStats = nftStats;
+            nftStats = nftStats.toArray();
         };
     };
 
@@ -613,7 +613,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 case (#empty) { return "empty"; };
                 case (#cancelled) { return "cancelled"; };
                 case (#confirmed) { return "confirmed"; };
-                case (_) { return "other"; };
+                // case (_) { return "other"; };
             }
         };
         var csv = "accountId, principal, subaccountStatus, subaccountBlob\n";
@@ -679,8 +679,8 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
 
     func totalNFTNumber () : Nat { 
         var total : Nat = 0;
-        for (nftInfo in nfts) {
-            total += nftInfo.0;
+        for (nftInfo in Iter.fromArray<NFTInfo>(nfts)) {
+            total += nftInfo.number;
         };
         total;
     };
