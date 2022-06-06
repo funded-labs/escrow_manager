@@ -616,13 +616,14 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 // case (_) { return "other"; };
             }
         };
-        var csv = "accountId, principal, subaccountStatus, subaccountBlob\n";
+        var csv = "accountId,principal,subaccountStatus,subaccountBlob,nftIndex\n";
         for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
             let accountIdText = kv.0;
             let principal = kv.1.0;
             let status = kv.1.1;
             let subBlob = kv.1.2;
-            csv #= accountIdText # ", " # Principal.toText(principal) # ", " # statusToText(status) # ", " # Utils.accountIdToHex(subBlob) # "\n";
+            let nftIndex = kv.1.3;
+            csv #= accountIdText # "," # Principal.toText(principal) # "," # statusToText(status) # "," # Utils.accountIdToHex(subBlob) # "," # Nat.toText(nftIndex) # "\n";
         };
         return csv;
     };
