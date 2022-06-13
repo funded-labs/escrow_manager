@@ -104,6 +104,16 @@ actor EscrowManager {
     func getProjectEscrowCanister (p: ProjectId) : ?CanisterId {
         Trie.get<ProjectIdText, CanisterId>(escrowCanisters, projectIdKey(p), Text.equal);
     };
+
+    public shared(msg) func dissociateEscrowCanister (p: ProjectId) : async () {
+        assert(msg.caller == admin);
+        switch (getProjectEscrowCanister(p)) {
+            case (?canister) {
+                escrowCanisters := Trie.remove<ProjectIdText, CanisterId>(escrowCanisters, projectIdKey(p), Text.equal).0;
+            };
+            case (null) { throw Error.reject("Project has no escrow canister"); };
+        };
+    };
     
     // helpers
 

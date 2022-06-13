@@ -310,7 +310,12 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         }; 
     };
 
+    public func resetHeartbeat () : async () {
+        previousHeartbeatDone := true;
+    };
     system func heartbeat() : async () {
+        if (previousHeartbeatDone == false) return;
+        previousHeartbeatDone := false;
         if (emptyAccounts.size() > 0) await cancelOpenAccountIds();
         if (confirmedAccounts.size() > 0) await checkConfirmedAccountsForFunds();
         if (cancelledThenConfirmedAccounts.size() > 0) await checkCancelledThenConfirmedAccountsForRefund();
@@ -320,6 +325,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         if (hasStartedDrainingAccounts and subaccountToDrain >= subaccountsToDrain.size()) {
             await payout();
         };
+        previousHeartbeatDone := true;
     };
 
     func cancelOpenAccountIds() : async () {
