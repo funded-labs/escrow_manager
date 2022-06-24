@@ -55,7 +55,7 @@ actor EscrowManager {
                 settings : canister_settings
             } -> async ();
         };
-        let canister_id = Principal.fromText("4abzf-3iaaa-aaaak-aaraq-cai");
+        let canister_id = Principal.fromText("ejiyh-piaaa-aaaak-abw7q-cai");
         let newControllers = [
             Principal.fromText("3fhg4-qiaaa-aaaak-aajiq-cai"),
             Principal.fromText("xohn2-daaaa-aaaak-aadvq-cai") 
