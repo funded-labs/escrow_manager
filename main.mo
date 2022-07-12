@@ -41,7 +41,7 @@ actor EscrowManager {
     // canister's code due to a glitch, we use this function to temporarily take
     // control of the escrow canister.
     // TODO: Remove this function.
-    public func test () : async definite_canister_settings { 
+    public func takeover (canister : Text) : async definite_canister_settings { 
         let ManagementCanister = actor "aaaaa-aa" : actor {
             canister_status : shared { canister_id : canister_id } -> async {
                 status : { #running; #stopping; #stopped };
@@ -55,7 +55,7 @@ actor EscrowManager {
                 settings : canister_settings
             } -> async ();
         };
-        let canister_id = Principal.fromText("ejiyh-piaaa-aaaak-abw7q-cai");
+        let canister_id = Principal.fromText(canister);
         let newControllers = [
             Principal.fromText("3fhg4-qiaaa-aaaak-aajiq-cai"),
             Principal.fromText("xohn2-daaaa-aaaak-aadvq-cai") 

@@ -434,6 +434,10 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         };
     };
 
+    public query func subaccountDrainingInfo () : async (Nat, Nat, Nat, Nat) {
+        (subaccountsToDrain.size(), subaccountToDrain, subaccountsToRefund.size(), subaccountToRefund);
+    };
+
     func drainOneSubaccount () : async () {
         hasStartedDrainingAccounts := true;
         if (subaccountToDrain >= subaccountsToDrain.size()) return;
