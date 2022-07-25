@@ -15,7 +15,10 @@ import Utils        "./utils";
 
 actor EscrowManager {
 
-    let admin : Principal = Principal.fromText("sqvf2-x3s5d-3a5m3-czni6-2zuda-rg4bk-7le4o-md733-uc75o-yihay-4ae");
+    let admins : [Principal] = [
+        Principal.fromText("sqvf2-x3s5d-3a5m3-czni6-2zuda-rg4bk-7le4o-md733-uc75o-yihay-4ae"),
+        Principal.fromText("imptf-t7jg2-g5akw-v4vai-u4qiy-ayepe-7a3vi-tf4hu-pe37j-iqcis-hqe")
+    ];
 
     type canister_id = Principal;
     type user_id = Principal;
@@ -90,7 +93,7 @@ actor EscrowManager {
 
     // TODO: Remove self as controller of created escrow canister to turn the canister into true "black hole" canister.
     public shared(msg) func createEscrowCanister (p: ProjectId, recipient: Principal, nfts: [NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat) : async () {
-        assert(msg.caller == admin);
+        assert(isAdmin(msg.caller));
         switch (getProjectEscrowCanister(p)) {
             case (?canister) { throw Error.reject("Project already has an escrow canister: " # Principal.toText(canister)); };
             case (null) {
@@ -106,7 +109,7 @@ actor EscrowManager {
     };
 
     public shared(msg) func dissociateEscrowCanister (p: ProjectId) : async () {
-        assert(msg.caller == admin);
+        assert(isAdmin(msg.caller));
         switch (getProjectEscrowCanister(p)) {
             case (?canister) {
                 escrowCanisters := Trie.remove<ProjectIdText, CanisterId>(escrowCanisters, projectIdKey(p), Text.equal).0;
@@ -139,6 +142,11 @@ actor EscrowManager {
     };
     public query func availableCycles() : async Nat {
         return Cycles.balance();
+    };
+
+    private func isAdmin(p: Principal): Bool {
+        func identity(x: Principal): Bool { x == p };
+        Option.isSome(Array.find<Principal>(admins,identity));
     };
 
 }
