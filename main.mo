@@ -1,3 +1,4 @@
+import Array        "mo:base/Array";
 import Blob         "mo:base/Blob";
 import Cycles       "mo:base/ExperimentalCycles";
 import Error        "mo:base/Error";
