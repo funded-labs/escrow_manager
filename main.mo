@@ -2,6 +2,7 @@ import Blob         "mo:base/Blob";
 import Cycles       "mo:base/ExperimentalCycles";
 import Error        "mo:base/Error";
 import Nat          "mo:base/Nat";
+import Option       "mo:base/Option";
 import Principal    "mo:base/Principal";
 import Text         "mo:base/Text";
 import Time         "mo:base/Time";
