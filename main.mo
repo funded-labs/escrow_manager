@@ -19,7 +19,8 @@ actor EscrowManager {
 
     let admins : [Principal] = [
         Principal.fromText("sqvf2-x3s5d-3a5m3-czni6-2zuda-rg4bk-7le4o-md733-uc75o-yihay-4ae"),
-        Principal.fromText("imptf-t7jg2-g5akw-v4vai-u4qiy-ayepe-7a3vi-tf4hu-pe37j-iqcis-hqe")
+        Principal.fromText("imptf-t7jg2-g5akw-v4vai-u4qiy-ayepe-7a3vi-tf4hu-pe37j-iqcis-hqe"),
+        Principal.fromText("krpk7-5knvf-l2jy3-mfzbr-6arys-xhrc5-5k76j-hfszl-mlm37-pqsd2-eqe")
     ];
 
     type canister_id = Principal;
