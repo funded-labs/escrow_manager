@@ -20,6 +20,9 @@ import Time         "mo:base/Time";
 import Trie         "mo:base/Trie";
 import Char         "mo:base/Char";
 import Nat32        "mo:base/Nat32";
+import BitcoinWallet "./BitcoinWallet";
+import BitcoinApi "./BitcoinApi";
+import EcdsaApi "./EcdsaApi";
 
 // import Backend      "canister:backend";
 
@@ -28,13 +31,14 @@ import Hex          "./hex";
 import Types        "./types";
 import Utils        "./utils";
 
-actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nfts: [Types.NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat, oversellPercentage: Nat) = this {
+actor class EscrowCanister(projectId: Types.ProjectId, recipientICP: Principal, recipientBTC: Text, nfts: [Types.NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat, oversellPercentage: Nat) = this {
 
     stable var nextSubAccount : Nat = 1_000_000_000;
 
     // CONSTS
     let FEE : Nat64 = 10_000;
-    let CROWDFUNDNFT_ACCOUNT = "8ac924e2eb6ad3d5c9fd6db905716aa04d949fe1a944442844214f59cf024e53";
+    let CROWDFUNDNFT_ACCOUNT_ICP = "8ac924e2eb6ad3d5c9fd6db905716aa04d949fe1a944442844214f59cf024e53";
+    let CROWDFUNDNFT_ACCOUNT_BTC = "mutpzuVqAURecm3KyEK5GW9AWmjvGsZaeu";
 
     type AccountId = Types.AccountId; // Blob
     type AccountIdText = Types.AccountIdText;
@@ -45,10 +49,57 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     type SubaccountBlob = Types.SubaccountBlob;
     type SubaccountNat8Arr = Types.SubaccountNat8Arr;
     type SubaccountStatus = Types.SubaccountStatus;
+    type TransferRequest = Types.TransferRequest;
+
+    // FOR BITCOIN INTEGRATION
+    type GetUtxosResponse = Types.GetUtxosResponse;
+    type MillisatoshiPerByte = Types.MillisatoshiPerByte;
+    type SendRequest = Types.SendRequest;
+    type Network = Types.Network;
+    type BitcoinAddress = Types.BitcoinAddress;
+    type ECDSAPublicKey = Types.ECDSAPublicKey;
+    type ECDSAPublicKeyReply = Types.ECDSAPublicKeyReply;
+    type SubaccountNetwork = Types.SubaccountNetwork; // "ICP or "BTC"
+
+    // The Bitcoin network to connect to.
+    // When developing locally this should be `Regtest`.
+    // When deploying to the IC this should be `Testnet`.
+    // `Mainnet` is currently unsupported.
+    stable let NETWORK : Network = #Regtest;
+    // The derivation path to use for ECDSA secp256k1.
+    let DERIVATION_PATH : [[Nat8]] = [];
+    // The ECDSA key name.
+    let KEY_NAME : Text = switch NETWORK {
+        // For local development, we use a special test key with dfx.
+        case (#Regtest) "dfx_test_key";
+        // On the IC we're using a test ECDSA key.
+        case _ "test_key_1"
+    };
+    /// Returns the UTXOs of the given Bitcoin address.
+    public func get_utxos(address : BitcoinAddress) : async GetUtxosResponse {
+        await BitcoinApi.get_utxos(NETWORK, address)
+    };
+    /// Returns the 100 fee percentiles measured in millisatoshi/byte.
+    /// Percentiles are computed from the last 10,000 transactions (if available).
+    public func get_current_fee_percentiles() : async [MillisatoshiPerByte] {
+        await BitcoinApi.get_current_fee_percentiles(NETWORK)
+    };
+    public func get_p2pkh() : async BitcoinAddress {
+        await get_p2pkh_address();
+    };
+    public func get_balance() : async Nat64 {
+        let accountId : AccountIdText = await defaultAccountId("BTC");
+        await accountBalance(accountId, "BTC");
+    };
+    /// Returns the P2PKH address of this canister at a specific derivation path.
+    func get_p2pkh_address() : async BitcoinAddress {
+        await BitcoinWallet.get_p2pkh_address(NETWORK, KEY_NAME, DERIVATION_PATH)
+    };
 
     public query func getMetadata () : async ({
         projectId : ProjectId;
-        recipient : Principal;
+        recipientICP : Principal;
+        recipientBTC: Text;
         nfts: [NFTInfo];
         endTime : Time.Time;
         maxNFTsPerWallet : Nat;
@@ -56,7 +107,8 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     }) {
         return {
             projectId = projectId;
-            recipient = recipient;
+            recipientICP = recipientICP;
+            recipientBTC = recipientBTC;
             nfts = nfts;
             endTime = endTime;
             maxNFTsPerWallet = maxNFTsPerWallet;
@@ -72,7 +124,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         #closed;
         #noproject;
     };
-    let Backend = actor "54shx-2yaaa-aaaai-qbhyq-cai" : actor {
+    let Backend = actor "rrkah-fqaaa-aaaaa-aaaaq-cai" : actor { //"54shx-2yaaa-aaaai-qbhyq-cai"
         getProjectState : shared ProjectIdText -> async ProjectState;
     };
 
@@ -80,13 +132,13 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     type AccountBalanceArgs = Types.AccountBalanceArgs;
     type ICPTs = Types.ICPTs;
     type SendArgs = Types.SendArgs;
-    let Ledger = actor "ryjl3-tyaaa-aaaaa-aaaba-cai" : actor { 
+    let Ledger = actor "ryjl3-tyaaa-aaaaa-aaaba-cai" : actor {
         send_dfx : shared SendArgs -> async Nat64;
-        account_balance_dfx : shared query AccountBalanceArgs -> async ICPTs; 
+        account_balance_dfx : shared query AccountBalanceArgs -> async ICPTs;
     };
 
-    stable var accountInfo : Trie.Trie<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)> = Trie.empty();
-    stable var logsCSV : Text = "time, info, isIncoming, from, to, amount, blockHeight, worked\n";
+    stable var accountInfo : Trie.Trie<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)> = Trie.empty();
+    stable var logsCSV : Text = "time, info, isIncoming, from, to, amount, network, blockHeight, worked\n";
 
     type AccountIdAndTime = {
         accountId   : AccountIdText;
@@ -105,7 +157,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
 
     public func addConfirmedAccountsToConfirmedAccountsArray () : async () {
         let newConfirmedAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
-        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
+        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo)) {
             let accountIdText = kv.0;
             let status = kv.1.1;
             if (status == #confirmed) {
@@ -117,7 +169,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
 
     // DISBURSEMENTS
 
-    type APS = (AccountIdText, Principal, SubaccountBlob);
+    type APS = (AccountIdText, Principal, SubaccountBlob, SubaccountNetwork);
 
     private var disbursements : Buffer.Buffer<TransferRequest> = Buffer.Buffer<TransferRequest>(1);
     private var subaccountsToDrain : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
@@ -191,16 +243,16 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         projectState := await Backend.getProjectState(Nat.toText(projectId));
         projectState;
     };
-    let CNFT_NFT_Canister = actor "2glp2-eqaaa-aaaak-aajoa-cai" : actor { 
+    let CNFT_NFT_Canister = actor "2glp2-eqaaa-aaaak-aajoa-cai" : actor {
         principalOwnsOne : shared Principal -> async Bool;
     };
 
-    public func getNewAccountId (principal: Principal, tier: NFTInfoIndex) : async Result.Result<AccountIdText, Text> {
-        // Test if "nfts[tier].number + oversellNFTNumber(nfts[tier].number))" is working as expected
+    public func getNewAccountId (principal: Principal, tier: NFTInfoIndex, network: SubaccountNetwork) : async Result.Result<AccountIdText, Text> {
         if (getNumberOfUncancelledSubaccounts(tier) >= nfts[tier].number + oversellNFTNumber(nfts[tier].number)) return #err("This project or project tier is fully funded (or almost there, so we are pausing new transfers for the time being).");
         if (endTime * 1_000_000 < Time.now()) return #err("Project is past crowdfund close date.");
         if (maxNFTsPerWallet > 0 and principalNumSubaccounts(principal) >= maxNFTsPerWallet) return #err("This project only allows each wallet to back the project " # Nat.toText(maxNFTsPerWallet) # " times. You have already attained this maximum.");
-        func isEqPrincipal (p: Principal) : Bool { p == principal }; 
+        if (not isAllowedNetwork(network)) return #err("This network is unknown or not supported in this Crowdfunding round");
+        func isEqPrincipal (p: Principal) : Bool { p == principal };
         switch (projectState) {
             case (#whitelist(whitelist)) {
                 if (
@@ -214,11 +266,68 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         let subaccount = nextSubAccount;
         nextSubAccount += 1;
         let subaccountBlob : SubaccountBlob = Utils.subToSubBlob(subaccount);
-        let accountIdText = Utils.accountIdToHex(Account.getAccountId(getPrincipal(), subaccountBlob));
-        accountInfo := Trie.putFresh<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(accountIdText), Text.equal, (principal, #empty, subaccountBlob, tier));
+        let accountIdText : AccountIdText = await accountIdFromBlob(subaccountBlob, network);
+        accountInfo := Trie.putFresh<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal, (principal, #empty, subaccountBlob, tier, network));
         emptyAccounts.add({ accountId = accountIdText; time = Time.now() });
         return #ok(accountIdText);
     };
+
+    func isAllowedNetwork (network: Text): Bool {
+        var allowedNetworks : [Types.SubaccountNetwork] = [];
+        switch (nfts[0].priceE8S) {
+            case (?priceE8S) {
+                allowedNetworks := Array.append(allowedNetworks, ["ICP"]);
+            };
+            case null {};
+        };
+        switch (nfts[0].priceSatoshi) {
+            case (?priceSatoshi) {
+                allowedNetworks := Array.append(allowedNetworks, ["BTC"]);
+            };
+            case null {};
+        };
+        func isSupportedNetwork (p: SubaccountNetwork) : Bool { p == network };
+        Array.filter<SubaccountNetwork>(allowedNetworks, isSupportedNetwork).size() > 0;
+    };
+
+    func accountIdFromBlob (subaccountBlob: SubaccountBlob, network: SubaccountNetwork): async AccountIdText {
+        var accountIdText : AccountIdText = "";
+        switch (network) {
+            case ("ICP") {
+                accountIdText := Utils.accountIdToHex(Account.getAccountId(getPrincipal(), subaccountBlob));
+            };
+            case ("BTC") {
+                let subaccountNat8Arr : SubaccountNat8Arr = Utils.subBlobToSubNat8Arr(subaccountBlob);
+                accountIdText := await BitcoinWallet.get_p2pkh_address(NETWORK, KEY_NAME, [subaccountNat8Arr]);
+            };
+            case _ {};
+        };
+        return accountIdText;
+    };
+
+    func defaultAccountId (network: Text): async AccountIdText {
+        if (network == "ICP") {
+            Utils.accountIdToHex(Account.getAccountId(getPrincipal(), Utils.defaultSubaccount()));
+        } else {
+            await BitcoinWallet.get_p2pkh_address(NETWORK, KEY_NAME, []);
+        };
+
+    };
+
+    public func accountBalance (account: AccountIdText, network: SubaccountNetwork) : async Nat64 {
+        var balance : Nat64 = 0;
+        switch (network) {
+            case ("ICP") {
+                balance := (await Ledger.account_balance_dfx({ account = account })).e8s;
+            };
+            case ("BTC") {
+                balance := await BitcoinApi.get_balance(NETWORK, account);
+            };
+            case _ {};
+        };
+        return balance;
+    };
+
     public func testHasCNFT (principal: Principal) : async Bool {
         if (await CNFT_NFT_Canister.principalOwnsOne(principal)) return true;
         return false;
@@ -235,16 +344,17 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         var newSubaccountsToDrain : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
         var newSubaccountsToRefund : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
 
-        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
+        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo)) {
             let accountIdText = kv.0;
             let principal = kv.1.0;
             let status = kv.1.1;
             let subBlob = kv.1.2;
+            let subNetwork = kv.1.4;
 
             if (status == #funded) {
-                newSubaccountsToDrain.add((accountIdText, principal, subBlob));
+                newSubaccountsToDrain.add((accountIdText, principal, subBlob, subNetwork));
             } else { // there should be no funds in subaccount, but just in case, we return it to backer
-                newSubaccountsToRefund.add((accountIdText, principal, subBlob));
+                newSubaccountsToRefund.add((accountIdText, principal, subBlob, subNetwork));
             };
         };
 
@@ -252,11 +362,11 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         subaccountsToRefund := newSubaccountsToRefund;
     };
 
-    public query func getSubaccountsInfo () : async ({ 
+    public query func getSubaccountsInfo () : async ({
         toDrain : { index : Nat; count : Nat; arr : [APS] };
         toRefund : { index : Nat; count : Nat; arr : [APS] };
     }) {
-        { 
+        {
             toDrain = { index = subaccountToDrain; count = subaccountsToDrain.size(); arr = subaccountsToDrain.toArray();};
             toRefund = { index = subaccountToRefund; count = subaccountsToRefund.size(); arr = subaccountsToRefund.toArray(); };
         };
@@ -269,11 +379,12 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
 
         var newSubaccountsToRefund : Buffer.Buffer<APS> = Buffer.Buffer<APS>(1);
 
-        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
+        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo)) {
             let accountIdText = kv.0;
             let principal = kv.1.0;
             let subBlob = kv.1.2;
-            newSubaccountsToRefund.add((accountIdText, principal, subBlob));
+            let subNetwork = kv.1.4;
+            newSubaccountsToRefund.add((accountIdText, principal, subBlob, subNetwork));
         };
 
         subaccountsToRefund := newSubaccountsToRefund;
@@ -283,10 +394,10 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
 
     let emptyAccountCutOff = 2; // minutes
     public func confirmTransfer(a : AccountIdText) : async Result.Result<(), Text> {
-        switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(a), Text.equal)) {
-            case (?pssi) { 
+        switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(a), Text.equal)) {
+            case (?pssi) {
                 if (pssi.1 == #empty) {
-                    accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(a), Text.equal, ?(pssi.0, #confirmed, pssi.2, pssi.3)).0;
+                    accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(a), Text.equal, ?(pssi.0, #confirmed, pssi.2, pssi.3, pssi.4)).0;
                     confirmedAccounts.add({ accountId = a; time = Time.now(); });
                     return #ok();
                 } else {
@@ -303,16 +414,16 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     };
 
     public func cancelTransfer(a : AccountIdText) : async () {
-        switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(a), Text.equal)) {
-            case (?pssi) { 
+        switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(a), Text.equal)) {
+            case (?pssi) {
                 if (pssi.1 == #empty) {
-                    accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(a), Text.equal, ?(pssi.0, #cancelled, pssi.2, pssi.3)).0;
+                    accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(a), Text.equal, ?(pssi.0, #cancelled, pssi.2, pssi.3, pssi.4)).0;
                 } else {
                     throw Error.reject("Account is not in empty state.");
                 };
             };
             case null { throw Error.reject("Account not found."); };
-        }; 
+        };
     };
 
     public func resetHeartbeat () : async () {
@@ -342,10 +453,10 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             let accountIdText = acc.accountId;
             let time = acc.time;
             if (time < cutoff) {
-                switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(accountIdText), Text.equal)) {
-                    case (?pssi) { 
+                switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal)) {
+                    case (?pssi) {
                         if (pssi.1 == #empty) {
-                            accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(accountIdText), Text.equal, ?(pssi.0, #cancelled, pssi.2, pssi.3)).0;
+                            accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal, ?(pssi.0, #cancelled, pssi.2, pssi.3, pssi.4)).0;
                         };
                     };
                     case null { };
@@ -365,26 +476,43 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         for (acc in confirmedAccounts.vals()) {
             let accountIdText = acc.accountId;
             let time = acc.time;
-            switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(accountIdText), Text.equal)) {
-                case (?pssi) { 
+            switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal)) {
+                case (?pssi) {
                     var balance : Nat64 = 0;
                     try {
-                        balance := (await accountBalance(accountIdText)).e8s;
+                        balance := await accountBalance(accountIdText, pssi.4);
                     } catch (e) { };
-                    if (balance >= Nat64.fromNat(nfts[pssi.3].priceE8S)) {
-                        accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(accountIdText), Text.equal, ?(pssi.0, #funded, pssi.2, pssi.3)).0;
+                    let price: Nat64 = switch (pssi.4) {
+                        case ("ICP") {
+                            switch (nfts[pssi.3].priceE8S) {
+                                case (?priceE8S) {Nat64.fromNat(priceE8S);};
+                                case null {Nat64.fromNat(0);};
+                            };
+                        };
+                        case ("BTC") {
+                            switch (nfts[pssi.3].priceSatoshi) {
+                                case (?priceSatoshi) {Nat64.fromNat(priceSatoshi);};
+                                case null {Nat64.fromNat(0);};
+                            }
+                        };
+                        case _ {Nat64.fromNat(0)};
+                    };
+                    if (balance >= price) {
+                        accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal, ?(pssi.0, #funded, pssi.2, pssi.3, pssi.4)).0;
                         log({
                             info = "transfer into the escrow";
                             isIncoming = true;
                             from = null;
                             to = accountIdText;
-                            amount = { e8s = balance };
+                            amount = balance;
+                            network = pssi.4;
                             blockHeight = 0;
+                            transactionId = [0];
                             worked = true;
                         })
                     } else {
                         if (time < cutoff) {
-                            accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(accountIdText), Text.equal, ?(pssi.0, #cancelled, pssi.2, pssi.3)).0;
+                            accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal, ?(pssi.0, #cancelled, pssi.2, pssi.3, pssi.4)).0;
                         } else {
                             newConfirmedAccounts.add(acc);
                         };
@@ -403,18 +531,20 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         for (acc in cancelledThenConfirmedAccounts.vals()) {
             let accountIdText = acc.accountId;
             let time = acc.time;
-            switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo, accIdTextKey(accountIdText), Text.equal)) {
-                case (?pssi) { 
+            switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal)) {
+                case (?pssi) {
                     var balance : Nat64 = 0;
                     try {
-                        balance := (await accountBalance(accountIdText)).e8s;
+                        balance := await accountBalance(accountIdText, pssi.4);
                     } catch (e) { };
                     if (balance >= FEE) {
+                        let to = await defaultAccountId(pssi.4);
                         addDisbursements([{
                             info = "refund from non-#funded account";
-                            from = ?Utils.subBlobToSubNat8Arr(pssi.2); 
-                            to = Utils.accountIdToHex(Account.getAccountId(pssi.0, Utils.defaultSubaccount()));
-                            amount = { e8s = balance - FEE };
+                            from = ?Utils.subBlobToSubNat8Arr(pssi.2);
+                            to = to;
+                            amount = balance - FEE;
+                            network = pssi.4;
                         }]);
                     } else {
                         if (time < cutoff) {
@@ -433,7 +563,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         let d = disbursements.get(disbursementToDisburse);
         disbursementToDisburse += 1;
         switch (await transfer(d)) {
-            case (#ok(nat)) { }; case (#err(err)) { 
+            case (#ok(text)) { }; case (#err(err)) {
                 // todo : check how much is in subaccount and disburse that amount. if empty, remove from list
             };
         };
@@ -449,15 +579,17 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         let s = subaccountsToDrain.get(subaccountToDrain);
         subaccountToDrain += 1;
         let accountIdText = s.0;
-        let subBlob = s.2; 
-        let defaultAccountId = Account.getAccountId(getPrincipal(), Utils.defaultSubaccount());
-        let amountInSubaccount = (await accountBalance(accountIdText)).e8s;
+        let subBlob = s.2;
+        let subNetwork = s.3;
+        let amountInSubaccount = await accountBalance(accountIdText, subNetwork);
         if (amountInSubaccount > FEE) {
-            addDisbursements([{ 
+            let to = await defaultAccountId(subNetwork);
+            addDisbursements([{
                 info = "sub to default account";
                 from = ?Utils.subBlobToSubNat8Arr(subBlob);
-                to = Utils.accountIdToHex(defaultAccountId);
-                amount = { e8s = amountInSubaccount - FEE };
+                to = to;
+                amount = amountInSubaccount - FEE;
+                network = s.3;
             }]);
         };
     };
@@ -468,95 +600,153 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         subaccountToRefund += 1;
         let accountIdText = s.0;
         let principal = s.1;
-        let subBlob = s.2; 
-        let amountInSubaccount = (await accountBalance(accountIdText)).e8s;
+        let subBlob = s.2;
+        let subNetwork = s.3;
+        let amountInSubaccount = await accountBalance(accountIdText, subNetwork);
         if (amountInSubaccount > FEE) {
             addDisbursements([{
                 info = "refund from non-#funded account";
-                from = ?Utils.subBlobToSubNat8Arr(subBlob); 
-                to = Utils.accountIdToHex(Account.getAccountId(principal, Utils.defaultSubaccount()));
-                amount = { e8s = amountInSubaccount - FEE };
+                from = ?Utils.subBlobToSubNat8Arr(subBlob);
+                to = if (subNetwork == "BTC") {"mz7XhfvLd9AqTwPME4PJtyT3DNQsavs7G6"} else {Utils.accountIdToHex(Account.getAccountId(principal, Utils.defaultSubaccount()))}; // Refund to local btc wallet canister until Plug BTC works
+                amount = amountInSubaccount - FEE;
+                network = subNetwork;
             }]);
         };
-    }; 
+    };
 
     func payout () : async () {
         if (subaccountToRefund < subaccountsToRefund.size() or disbursementToDisburse < disbursements.size()) return;
         hasPaidOut := true;
-        let defaultAccountIdHex = Utils.accountIdToHex(Account.getAccountId(getPrincipal(), Utils.defaultSubaccount()));
-        let recipientAccountIdHex = Utils.accountIdToHex(Account.getAccountId(recipient, Utils.defaultSubaccount()));
-        var expectedPayout = Nat64.fromNat(0);
+        let defaultAccountIdICP = await defaultAccountId("ICP");
+        let defaultAccountIdBTC = await defaultAccountId("BTC");
+        let recipientAccountIdICP = Utils.accountIdToHex(Account.getAccountId(recipientICP, Utils.defaultSubaccount()));
+        let recipientAccountIdBTC = recipientBTC;
+        var expectedPayoutICP = Nat64.fromNat(0);
+        var expectedPayoutBTC = Nat64.fromNat(0);
         for (tier in Iter.fromArray<NFTInfo>(nfts)) {
-            expectedPayout += Nat64.fromNat(Int.abs(Float.toInt(Float.fromInt(tier.number) * Float.fromInt(tier.priceE8S) * 0.95))); // We take a 5% cut.
+            switch (tier.priceE8S) {
+                case (?priceE8S) {
+                    expectedPayoutICP += Nat64.fromNat(Int.abs(Float.toInt(Float.fromInt(tier.number) * Float.fromInt(priceE8S) * 0.95))); // We take a 5% cut.
+                };
+                case null {};
+            };
+            switch (tier.priceSatoshi) {
+                case (?priceSatoshi) {
+                    expectedPayoutBTC += Nat64.fromNat(Int.abs(Float.toInt(Float.fromInt(tier.number) * Float.fromInt(priceSatoshi) * 0.95))); // We take a 5% cut.
+                };
+                case null {};
+            };
         };
-        let total = (await accountBalance(defaultAccountIdHex)).e8s;
-        var payout = expectedPayout;
-        if (total < expectedPayout) {
-            payout := total;
+        let totalICP = await accountBalance(defaultAccountIdICP, "ICP");
+        let totalBTC = await accountBalance(defaultAccountIdBTC, "BTC");
+        var payoutICP = expectedPayoutICP;
+        var payoutBTC = expectedPayoutBTC;
+        if (totalICP < expectedPayoutICP) {
+            payoutICP := totalICP;
         };
-        addDisbursements([{
-            info = "payout to project creator";
-            from = null;
-            to = recipientAccountIdHex;
-            amount = { e8s = payout - FEE }; 
-        }]);
-
-        // Our cut
-        let ourCut : Nat64 = total - payout;
-        if (ourCut > FEE) {
+        if (totalBTC < expectedPayoutBTC) {
+            payoutBTC := totalBTC;
+        };
+        if (payoutICP > 0) {
             addDisbursements([{
-                info = "crowdfundnft 5% cut";
+                info = "payout to project creator";
                 from = null;
-                to = CROWDFUNDNFT_ACCOUNT;
-                amount = { e8s = ourCut - FEE }
+                to = recipientAccountIdICP;
+                amount = payoutICP - FEE;
+                network = "ICP";
             }]);
-        }; 
+            // Our cut
+            let ourCut : Nat64 = totalICP - payoutICP;
+            if (ourCut > FEE) {
+                addDisbursements([{
+                    info = "crowdfundnft 5% cut";
+                    from = null;
+                    to = CROWDFUNDNFT_ACCOUNT_ICP;
+                    amount = ourCut - FEE;
+                    network = "ICP";
+                }]);
+            };
+        };
+        if (payoutBTC > 0) {
+            addDisbursements([{
+                info = "payout to project creator";
+                from = ?[];
+                to = recipientBTC;
+                amount = payoutBTC;
+                network = "BTC";
+            }]);
+            // Our cut
+            let ourCut : Nat64 = totalBTC - payoutBTC;
+            if (ourCut > FEE) {
+                addDisbursements([{
+                    info = "crowdfundnft 5% cut";
+                    from = ?[];
+                    to = CROWDFUNDNFT_ACCOUNT_BTC;
+                    amount = ourCut;
+                    network = "ICP";
+                }]);
+            };
+        };
     };
 
     // LEDGER WRAPPERS
-
-    func accountBalance (account: AccountIdText) : async ICPTs {
-        await Ledger.account_balance_dfx({ account = account });
-    };
-
-    type TransferRequest = {
-        info: Text;
-        from: ?SubaccountNat8Arr;
-        to: AccountIdText;
-        amount: ICPTs;
-    };
-    func transfer (r: TransferRequest) : async Result.Result<Nat64, Text> {
-        try {
-            let blockHeight = await Ledger.send_dfx({
-                memo = Nat64.fromNat(0);
-                from_subaccount = r.from;
-                to = r.to;
-                amount = r.amount;
-                fee = { e8s = FEE };
-                created_at_time = ?Time.now();
-            });
+    func transfer (r: TransferRequest) : async Result.Result<Text, Text> {
+        var error: Bool = false;
+        var blockHeight: Nat64 = 0;
+        var transactionId: [Nat8] = [0];
+        if (r.network == "ICP") {
+            try {
+                blockHeight := await Ledger.send_dfx({
+                    memo = Nat64.fromNat(0);
+                    from_subaccount = r.from;
+                    to = r.to;
+                    amount = { e8s = r.amount };
+                    fee = { e8s = FEE };
+                    created_at_time = ?Time.now();
+                });
+            } catch (e) {
+                error := true
+            };
+        } else if (r.network == "BTC") {
+            try {
+                switch (r.from) {
+                    case (?from) {
+                        transactionId := await BitcoinWallet.send(NETWORK, [from], KEY_NAME, r.to, r.amount);
+                    };
+                    case null {error := true};
+                };
+            } catch (e) {
+                error := true;
+            };
+        } else {
+            return #err("Missing or unsupoorted network.");
+        };
+        if (error) {
             log({
-                info = r.info;
-                isIncoming = false;
-                from = r.from;
-                to = r.to;
-                amount = r.amount;
-                blockHeight = blockHeight;
-                worked = true;
-            });
-            return #ok(blockHeight);
-        } catch (e) {
-            log({
-                info = r.info;
-                isIncoming = false;
-                from = r.from;
-                to = r.to;
-                amount = r.amount;
-                blockHeight = 0 : Nat64;
-                worked = false;
-            });
+                    info = r.info;
+                    isIncoming = false;
+                    from = r.from;
+                    to = r.to;
+                    amount = r.amount;
+                    network = r.network;
+                    blockHeight = 0 : Nat64;
+                    transactionId = [0] : [Nat8];
+                    worked = false;
+                });
             return #err("Something went wrong.");
         };
+        log({
+            info = r.info;
+            isIncoming = false;
+            from = r.from;
+            to = r.to;
+            amount = r.amount;
+            network = r.network;
+            blockHeight = blockHeight;
+            transactionId = transactionId;
+            worked = true;
+        });
+        return #ok("Success")
     };
 
     // STATS
@@ -568,20 +758,22 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         for (t in Iter.fromArray<NFTInfo>(nfts)) {
             nftStats.add({
                 number = t.number;
-                priceE8S = t.priceE8S;
+                priceE8S = switch (t.priceE8S) {case (?priceE8S) {priceE8S}; case null {0};};
+                priceSatoshi = switch (t.priceSatoshi) {case (?priceSatoshi) {priceSatoshi}; case null {0};};
                 sold = 0;
                 openSubaccounts = 0;
                 oversellNumber = oversellNFTNumber(t.number);
             });
         };
-        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
+        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo)) {
             let status = ss.1.1;
             let nftInfoIndex = ss.1.3;
             if (status == #funded) {
                 let curStats = nftStats.get(nftInfoIndex);
-                nftStats.put(nftInfoIndex, { 
+                nftStats.put(nftInfoIndex, {
                     number = curStats.number;
                     priceE8S = curStats.priceE8S;
+                    priceSatoshi = curStats.priceSatoshi;
                     sold = curStats.sold + 1;
                     openSubaccounts = curStats.openSubaccounts; 
                     oversellNumber = oversellNFTNumber(curStats.number);
@@ -589,16 +781,17 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             };
             if (status == #empty or status == #confirmed) {
                 let curStats = nftStats.get(nftInfoIndex);
-                nftStats.put(nftInfoIndex, { 
+                nftStats.put(nftInfoIndex, {
                     number = curStats.number;
                     priceE8S = curStats.priceE8S;
+                    priceSatoshi = curStats.priceSatoshi;
                     sold = curStats.sold;
                     openSubaccounts = curStats.openSubaccounts + 1; 
                     oversellNumber = oversellNFTNumber(curStats.number);
                 });
             };
         };
-        { 
+        {
             endTime  = endTime;
             nftStats = nftStats.toArray();
         };
@@ -611,8 +804,10 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         info: Text;
         from : ?SubaccountNat8Arr;
         to : AccountIdText;
-        amount : ICPTs;
+        amount : Nat64;
+        network: Text;
         blockHeight : Nat64;
+        transactionId: [Nat8];
         worked: Bool;
     };
     func log (msg : Log) : () {
@@ -621,11 +816,11 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             case (?f) { fromString := Utils.accountIdToHex(Blob.fromArray(f)); };
             case null { fromString := "null"; };
         };
-        logsCSV #= Int.toText(Time.now()) # ", " # msg.info # ", " # Bool.toText(msg.isIncoming) # ", " # fromString # ", " # msg.to # ", " # Nat64.toText(msg.amount.e8s) # ", " # Nat64.toText(msg.blockHeight) # ", " # Bool.toText(msg.worked) # "\n";
+        logsCSV #= Int.toText(Time.now()) # ", " # msg.info # ", " # Bool.toText(msg.isIncoming) # ", " # fromString # ", " # msg.to # ", " # Nat64.toText(msg.amount) # ", " # msg.network # ", " # Nat64.toText(msg.blockHeight) # ", " # Utils.accountIdToHex(Blob.fromArray(msg.transactionId)) # ", " # Bool.toText(msg.worked) # "\n";
     };
 
-    public query func getAccountsInfo () : async Text { 
-        func statusToText (s : SubaccountStatus) : Text { 
+    public query func getAccountsInfo () : async Text {
+        func statusToText (s : SubaccountStatus) : Text {
             switch (s) {
                 case (#funded) { return "funded" };
                 case (#empty) { return "empty"; };
@@ -634,20 +829,21 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 // case (_) { return "other"; };
             }
         };
-        var csv = "accountId,principal,subaccountStatus,subaccountBlob,nftIndex\n";
-        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
+        var csv = "accountId,principal,subaccountStatus,subaccountBlob,nftIndex,subaccountNetwork\n";
+        for (kv in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo)) {
             let accountIdText = kv.0;
             let principal = kv.1.0;
             let status = kv.1.1;
             let subBlob = kv.1.2;
             let nftIndex = kv.1.3;
-            csv #= accountIdText # "," # Principal.toText(principal) # "," # statusToText(status) # "," # Utils.accountIdToHex(subBlob) # "," # Nat.toText(nftIndex) # "\n";
+            let subNetwork = kv.1.4;
+            csv #= accountIdText # "," # Principal.toText(principal) # "," # statusToText(status) # "," # Utils.accountIdToHex(subBlob) # "," # Nat.toText(nftIndex) # "," # subNetwork # "\n";
         };
         return csv;
     };
     public query func getLogs () : async Text { logsCSV; };
-    public query func getDisbursements () : async Text { 
-        var str : Text = "index, info, from, to, amount\n";
+    public query func getDisbursements () : async Text {
+        var str : Text = "index, info, from, to, amount, network\n";
         var i = 0;
         for (d in disbursements.vals()) {
             var fromStr = "null";
@@ -655,7 +851,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 case (?f) { fromStr := Utils.accountIdToHex(Blob.fromArray(f)); };
                 case null { };
             };
-            str #= Nat.toText(i) # ", " # d.info # ", " # fromStr # ", " # d.to # ", " # Nat64.toText(d.amount.e8s) # "\n";
+            str #= Nat.toText(i) # ", " # d.info # ", " # fromStr # ", " # d.to # ", " # Nat64.toText(d.amount) # ", " # d.network # "\n";
             i += 1;
         };
         return str;
@@ -669,7 +865,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
 
     func getNumberOfUncancelledSubaccounts (nftInfoIndex : Nat) : Nat {
         var count = 0;
-        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
+        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo)) {
             let status = ss.1.1;
             if (status != #cancelled and ss.1.3 == nftInfoIndex) {
                 count += 1;
@@ -679,16 +875,16 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     };
 
     func principalHasUncancelledSubaccount (p : Principal) : Bool {
-        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
+        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo)) {
             if (ss.1.0 == p and ss.1.1 != #cancelled) {
                 return true;
             };
-        }; 
+        };
         return false;
     };
     func principalNumSubaccounts (p : Principal) : Nat {
         var count : Nat = 0;
-        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
+        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo)) {
             if (ss.1.0 == p and ss.1.1 != #cancelled) {
                 count += 1;
             };
@@ -696,14 +892,14 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         count;
     };
 
-    func totalNFTNumber () : Nat { 
+    func totalNFTNumber () : Nat {
         var total : Nat = 0;
         for (nftInfo in Iter.fromArray<NFTInfo>(nfts)) {
             total += nftInfo.number;
         };
         total;
     };
-    
+
     // Results rounds to floor
     func oversellNFTNumber(number: Nat) : Int {
         let _number = Float.fromInt(number);
@@ -714,9 +910,9 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         return Float.toInt(floatValue);
     };
 
-    func projectIsFullyFunded () : Bool { 
+    func projectIsFullyFunded () : Bool {
         var count = 0;
-        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
+        for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo)) {
             if (ss.1.1 == #funded) {
                 count += 1;
             };
@@ -724,7 +920,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
 
         return count >= totalNFTNumber();
     };
-    
+
     func accIdTextKey(s : AccountIdText) : Trie.Key<AccountIdText> {
         { key = s; hash = Text.hash(s) };
     };
