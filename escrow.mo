@@ -38,7 +38,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipientICP: Principal, 
     // CONSTS
     let FEE : Nat64 = 10_000;
     let CROWDFUNDNFT_ACCOUNT_ICP = "8ac924e2eb6ad3d5c9fd6db905716aa04d949fe1a944442844214f59cf024e53";
-    let CROWDFUNDNFT_ACCOUNT_BTC = "mutpzuVqAURecm3KyEK5GW9AWmjvGsZaeu";
+    let CROWDFUNDNFT_ACCOUNT_BTC = "";
 
     type AccountId = Types.AccountId; // Blob
     type AccountIdText = Types.AccountIdText;
@@ -124,7 +124,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipientICP: Principal, 
         #closed;
         #noproject;
     };
-    let Backend = actor "rrkah-fqaaa-aaaaa-aaaaq-cai" : actor { //"54shx-2yaaa-aaaai-qbhyq-cai"
+    let Backend = actor "54shx-2yaaa-aaaai-qbhyq-cai" : actor {
         getProjectState : shared ProjectIdText -> async ProjectState;
     };
 

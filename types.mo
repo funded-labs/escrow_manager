@@ -33,6 +33,7 @@ module {
     };
 
     // PROJECT
+
     public type ProjectId = Nat;
     public type ProjectStatus = {
         #whitelist;
@@ -42,7 +43,7 @@ module {
 
     // LEDGER
     public type AccountBalanceArgs  = { account : AccountIdText };
-    public type ICPTs               = { e8s     : Nat64     };
+    public type ICPTs               = { e8s     : TokenAmount     };
     public type SendArgs            = {
         memo            : Nat64;
         amount          : ICPTs;
