@@ -3,7 +3,7 @@ import Blob     "mo:base/Blob";
 import Nat8     "mo:base/Nat8";
 import Nat32    "mo:base/Nat32";
 
-import Hex      "./Hex";
+import Hex      "./hex";
 import Types    "./types";
 
 module {
