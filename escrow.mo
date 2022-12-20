@@ -576,13 +576,12 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             let nftInfoIndex = ss.1.3;
             if (status == #funded) {
                 let curStats = nftStats.get(nftInfoIndex);
-                let oversellNumber = oversellNFTNumber(curStats.number);
                 nftStats.put(nftInfoIndex, { 
                     number = curStats.number;
                     priceE8S = curStats.priceE8S;
                     sold = curStats.sold + 1;
                     openSubaccounts = curStats.openSubaccounts; 
-                    oversellNumber = oversellNumber;
+                    oversellNumber = oversellNFTNumber(curStats.number);
                 });
             };
             if (status == #empty or status == #confirmed) {
