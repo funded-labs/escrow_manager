@@ -26,7 +26,7 @@ import Hex          "./hex";
 import Types        "./types";
 import Utils        "./utils";
 
-actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nfts: [Types.NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat) = this {
+actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nfts: [Types.NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat, oversellPercentage: Nat) = this {
 
     stable var nextSubAccount : Nat = 1_000_000_000;
 
@@ -50,6 +50,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         nfts: [NFTInfo];
         endTime : Time.Time;
         maxNFTsPerWallet : Nat;
+        oversellPercentage: Nat;
     }) {
         return {
             projectId = projectId;
@@ -57,6 +58,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             nfts = nfts;
             endTime = endTime;
             maxNFTsPerWallet = maxNFTsPerWallet;
+            oversellPercentage = oversellPercentage;
         };
     };
 
@@ -566,6 +568,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 priceE8S = t.priceE8S;
                 sold = 0;
                 openSubaccounts = 0;
+                oversellNumber = oversellNFTNumber(t.number);
             });
         };
         for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
@@ -573,11 +576,13 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             let nftInfoIndex = ss.1.3;
             if (status == #funded) {
                 let curStats = nftStats.get(nftInfoIndex);
+                let oversellNumber = oversellNFTNumber(curStats.number);
                 nftStats.put(nftInfoIndex, { 
                     number = curStats.number;
                     priceE8S = curStats.priceE8S;
                     sold = curStats.sold + 1;
                     openSubaccounts = curStats.openSubaccounts; 
+                    oversellNumber = oversellNumber;
                 });
             };
             if (status == #empty or status == #confirmed) {
@@ -587,6 +592,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                     priceE8S = curStats.priceE8S;
                     sold = curStats.sold;
                     openSubaccounts = curStats.openSubaccounts + 1; 
+                    oversellNumber = oversellNFTNumber(curStats.number);
                 });
             };
         };
@@ -695,6 +701,15 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         };
         total;
     };
+    
+    func oversellNFTNumber(number: Nat) : Nat {
+        if(oversellPercentage == 0) {
+            return number;
+        } else {
+            return Nat.mul(number, Nat.div((oversellPercentage, 100)));
+        }
+    };
+
     func projectIsFullyFunded () : Bool { 
         var count = 0;
         for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
@@ -702,9 +717,10 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 count += 1;
             };
         };
+
         return count >= totalNFTNumber();
     };
-
+    
     func accIdTextKey(s : AccountIdText) : Trie.Key<AccountIdText> {
         { key = s; hash = Text.hash(s) };
     };

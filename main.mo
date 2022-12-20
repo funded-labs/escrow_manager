@@ -96,13 +96,13 @@ actor EscrowManager {
     };
 
     // TODO: Remove self as controller of created escrow canister to turn the canister into true "black hole" canister.
-    public shared(msg) func createEscrowCanister (p: ProjectId, recipient: Principal, nfts: [NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat) : async () {
+    public shared(msg) func createEscrowCanister (p: ProjectId, recipient: Principal, nfts: [NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat, oversellPercentage: Nat) : async () {
         assert(isAdmin(msg.caller));
         switch (getProjectEscrowCanister(p)) {
             case (?canister) { throw Error.reject("Project already has an escrow canister: " # Principal.toText(canister)); };
             case (null) {
                 Cycles.add(1000000000000);
-                let canister = await Escrow.EscrowCanister(p, recipient, nfts, endTime, maxNFTsPerWallet);
+                let canister = await Escrow.EscrowCanister(p, recipient, nfts, endTime, maxNFTsPerWallet, oversellPercentage);
                 escrowCanisters := Trie.putFresh<ProjectIdText, CanisterId>(escrowCanisters, projectIdKey(p), Text.equal, Principal.fromActor(canister));
             };
         };

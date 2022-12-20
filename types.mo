@@ -47,6 +47,7 @@ module {
         priceE8S        : Nat;
         sold            : Nat;
         openSubaccounts : Nat;
+        oversellNumber  : Nat;
     };
     public type EscrowStats         = {
         endTime     : Time.Time;
