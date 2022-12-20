@@ -194,7 +194,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     };
 
     public func getNewAccountId (principal: Principal, tier: NFTInfoIndex) : async Result.Result<AccountIdText, Text> {
-        if (getNumberOfUncancelledSubaccounts(tier) >= nfts[tier].number) return #err("This project or project tier is fully funded (or almost there, so we are pausing new transfers for the time being).");
+        if (getNumberOfUncancelledSubaccounts(tier) >= Nat.add(nfts[tier].number, oversellNFTNumber(nfts[tier].number))) return #err("This project or project tier is fully funded (or almost there, so we are pausing new transfers for the time being).");
         if (endTime * 1_000_000 < Time.now()) return #err("Project is past crowdfund close date.");
         if (maxNFTsPerWallet > 0 and principalNumSubaccounts(principal) >= maxNFTsPerWallet) return #err("This project only allows each wallet to back the project " # Nat.toText(maxNFTsPerWallet) # " times. You have already attained this maximum.");
         func isEqPrincipal (p: Principal) : Bool { p == principal }; 
