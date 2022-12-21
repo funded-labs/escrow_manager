@@ -85,6 +85,7 @@ actor EscrowManager {
     type SubaccountBlob = Types.SubaccountBlob;
 
     stable var escrowCanisters : Trie.Trie<ProjectIdText, CanisterId> = Trie.empty();
+    stable var maxOversellPercentage : Nat = 20;
 
     // Canister management
 
@@ -101,11 +102,24 @@ actor EscrowManager {
         switch (getProjectEscrowCanister(p)) {
             case (?canister) { throw Error.reject("Project already has an escrow canister: " # Principal.toText(canister)); };
             case (null) {
+                if (oversellPercentage > maxOversellPercentage) {
+                    throw Error.reject("Oversell percentage can't exceed " # Nat.toText(maxOversellPercentage) # "%");
+                } else {
                 Cycles.add(1000000000000);
                 let canister = await Escrow.EscrowCanister(p, recipient, nfts, endTime, maxNFTsPerWallet, oversellPercentage);
                 escrowCanisters := Trie.putFresh<ProjectIdText, CanisterId>(escrowCanisters, projectIdKey(p), Text.equal, Principal.fromActor(canister));
+                };
             };
         };
+    };
+
+    public shared({caller}) func setMaxOversellPercentage(percentage: Nat): async () {
+        assert(isAdmin(caller));
+        maxOversellPercentage := percentage;
+    };
+    
+    public query func getMaxOversellPercentage(): async Nat {
+        maxOversellPercentage
     };
 
     func getProjectEscrowCanister (p: ProjectId) : ?CanisterId {
