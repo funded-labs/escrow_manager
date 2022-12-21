@@ -18,6 +18,8 @@ import Result       "mo:base/Result";
 import Text         "mo:base/Text";
 import Time         "mo:base/Time";
 import Trie         "mo:base/Trie";
+import Char         "mo:base/Char";
+import Nat32        "mo:base/Nat32";
 
 // import Backend      "canister:backend";
 
@@ -194,7 +196,8 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     };
 
     public func getNewAccountId (principal: Principal, tier: NFTInfoIndex) : async Result.Result<AccountIdText, Text> {
-        if (getNumberOfUncancelledSubaccounts(tier) >= Nat.add(nfts[tier].number, oversellNFTNumber(nfts[tier].number))) return #err("This project or project tier is fully funded (or almost there, so we are pausing new transfers for the time being).");
+        // Test if "nfts[tier].number + oversellNFTNumber(nfts[tier].number))" is working as expected
+        if (getNumberOfUncancelledSubaccounts(tier) >= nfts[tier].number + oversellNFTNumber(nfts[tier].number)) return #err("This project or project tier is fully funded (or almost there, so we are pausing new transfers for the time being).");
         if (endTime * 1_000_000 < Time.now()) return #err("Project is past crowdfund close date.");
         if (maxNFTsPerWallet > 0 and principalNumSubaccounts(principal) >= maxNFTsPerWallet) return #err("This project only allows each wallet to back the project " # Nat.toText(maxNFTsPerWallet) # " times. You have already attained this maximum.");
         func isEqPrincipal (p: Principal) : Bool { p == principal }; 
@@ -591,7 +594,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                     priceE8S = curStats.priceE8S;
                     sold = curStats.sold;
                     openSubaccounts = curStats.openSubaccounts + 1; 
-                    oversellNumber = oversellNFTNumber(curStats.number);
+                    oversellNumber = oversellNFTNumber(curStats.number) + 0;
                 });
             };
         };
@@ -701,13 +704,46 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         total;
     };
     
-    func oversellNFTNumber(number: Nat) : Nat {
-        if(oversellPercentage == 0) {
-            return number;
-        } else {
-            return Nat.mul(number, Nat.div((oversellPercentage, 100)));
-        }
+    // Results rounds to floor
+    func oversellNFTNumber(number: Nat) : Int {
+        let _number = textToFloat(Nat.toText(number));
+        let _oversellPercentage = textToFloat(Nat.toText(oversellPercentage));
+        let divisionPercentage = Float.div(_oversellPercentage, Float.fromInt(100));
+
+        let floatValue = Float.mul(_number, divisionPercentage);
+        let intValue = Float.toInt(floatValue);
+        return intValue;
     };
+
+    func textToFloat(t : Text): Float {
+        var i : Float = 1;
+        var f : Float = 0;
+        var isDecimal : Bool = false;
+
+        for (c in t.chars()) {
+            if (Char.isDigit(c)) {
+                let charToNat : Nat64 = Nat64.fromNat(Nat32.toNat(Char.toNat32(c) -48));
+                let natToFloat : Float = Float.fromInt64(Int64.fromNat64(charToNat));
+                if (isDecimal) {
+                    let n : Float = natToFloat / Float.pow(10, i);
+                    f := f + n;
+                } else {
+                    f := f * 10 + natToFloat;
+                };
+                i := i + 1;
+                } else {
+                    if (Char.equal(c, '.') or Char.equal(c, ',')) {
+                        f := f / Float.pow(10, i); // Force decimal
+                        f := f * Float.pow(10, i); // Correction
+                        isDecimal := true;
+                        i := 1;
+                } else {
+                    return 0;
+                };
+            };
+        };
+        return f;
+  };
 
     func projectIsFullyFunded () : Bool { 
         var count = 0;
