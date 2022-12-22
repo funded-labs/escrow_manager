@@ -711,8 +711,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         let divisionPercentage = Float.div(_oversellPercentage, Float.fromInt(100));
 
         let floatValue = Float.mul(_number, divisionPercentage);
-        let intValue = Float.toInt(floatValue);
-        return intValue;
+        return Float.toInt(floatValue);
     };
 
     func textToFloat(t : Text): Float {
