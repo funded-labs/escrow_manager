@@ -24,14 +24,22 @@ import BitcoinWallet "./BitcoinWallet";
 import BitcoinApi "./BitcoinApi";
 import EcdsaApi "./EcdsaApi";
 
-// import Backend      "canister:backend";
-
 import Account      "./account";
 import Hex          "./hex";
 import Types        "./types";
 import Utils        "./utils";
 
-actor class EscrowCanister(projectId: Types.ProjectId, recipientICP: Principal, recipientBTC: Text, nfts: [Types.NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat, oversellPercentage: Nat) = this {
+actor class EscrowCanister(
+    projectId: Types.ProjectId,
+    recipientICP: Principal,
+    recipientBTC: Text,
+    nfts: [Types.NFTInfo],
+    endTime : Time.Time,
+    maxNFTsPerWallet : Nat,
+    network: Types.Network,
+    backendPrincipal: Text,
+    oversellPercentage: Nat
+) = this {
 
     stable var nextSubAccount : Nat = 1_000_000_000;
 
@@ -55,21 +63,15 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipientICP: Principal, 
     type GetUtxosResponse = Types.GetUtxosResponse;
     type MillisatoshiPerByte = Types.MillisatoshiPerByte;
     type SendRequest = Types.SendRequest;
-    type Network = Types.Network;
     type BitcoinAddress = Types.BitcoinAddress;
     type ECDSAPublicKey = Types.ECDSAPublicKey;
     type ECDSAPublicKeyReply = Types.ECDSAPublicKeyReply;
     type SubaccountNetwork = Types.SubaccountNetwork; // "ICP or "BTC"
 
-    // The Bitcoin network to connect to.
-    // When developing locally this should be `Regtest`.
-    // When deploying to the IC this should be `Testnet`.
-    // `Mainnet` is currently unsupported.
-    stable let NETWORK : Network = #Regtest;
     // The derivation path to use for ECDSA secp256k1.
     let DERIVATION_PATH : [[Nat8]] = [];
     // The ECDSA key name.
-    let KEY_NAME : Text = switch NETWORK {
+    let KEY_NAME : Text = switch network {
         // For local development, we use a special test key with dfx.
         case (#Regtest) "dfx_test_key";
         // On the IC we're using a test ECDSA key.
@@ -77,12 +79,12 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipientICP: Principal, 
     };
     /// Returns the UTXOs of the given Bitcoin address.
     public func get_utxos(address : BitcoinAddress) : async GetUtxosResponse {
-        await BitcoinApi.get_utxos(NETWORK, address)
+        await BitcoinApi.get_utxos(network, address)
     };
     /// Returns the 100 fee percentiles measured in millisatoshi/byte.
     /// Percentiles are computed from the last 10,000 transactions (if available).
     public func get_current_fee_percentiles() : async [MillisatoshiPerByte] {
-        await BitcoinApi.get_current_fee_percentiles(NETWORK)
+        await BitcoinApi.get_current_fee_percentiles(network)
     };
     public func get_p2pkh() : async BitcoinAddress {
         await get_p2pkh_address();
@@ -93,7 +95,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipientICP: Principal, 
     };
     /// Returns the P2PKH address of this canister at a specific derivation path.
     func get_p2pkh_address() : async BitcoinAddress {
-        await BitcoinWallet.get_p2pkh_address(NETWORK, KEY_NAME, DERIVATION_PATH)
+        await BitcoinWallet.get_p2pkh_address(network, KEY_NAME, DERIVATION_PATH)
     };
 
     public query func getMetadata () : async ({
@@ -124,7 +126,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipientICP: Principal, 
         #closed;
         #noproject;
     };
-    let Backend = actor "54shx-2yaaa-aaaai-qbhyq-cai" : actor {
+    let Backend = actor(backendPrincipal) : actor {
         getProjectState : shared ProjectIdText -> async ProjectState;
     };
 
@@ -775,7 +777,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipientICP: Principal, 
                     priceE8S = curStats.priceE8S;
                     priceSatoshi = curStats.priceSatoshi;
                     sold = curStats.sold + 1;
-                    openSubaccounts = curStats.openSubaccounts; 
+                    openSubaccounts = curStats.openSubaccounts;
                     oversellNumber = oversellNFTNumber(curStats.number);
                 });
             };
@@ -786,7 +788,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipientICP: Principal, 
                     priceE8S = curStats.priceE8S;
                     priceSatoshi = curStats.priceSatoshi;
                     sold = curStats.sold;
-                    openSubaccounts = curStats.openSubaccounts + 1; 
+                    openSubaccounts = curStats.openSubaccounts + 1;
                     oversellNumber = oversellNFTNumber(curStats.number);
                 });
             };
