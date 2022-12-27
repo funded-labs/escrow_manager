@@ -594,7 +594,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                     priceE8S = curStats.priceE8S;
                     sold = curStats.sold;
                     openSubaccounts = curStats.openSubaccounts + 1; 
-                    oversellNumber = oversellNFTNumber(curStats.number) + 0;
+                    oversellNumber = oversellNFTNumber(curStats.number);
                 });
             };
         };
@@ -706,43 +706,13 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     
     // Results rounds to floor
     func oversellNFTNumber(number: Nat) : Int {
-        let _number = textToFloat(Nat.toText(number));
-        let _oversellPercentage = textToFloat(Nat.toText(oversellPercentage));
+        let _number = Float.fromInt(number);
+        let _oversellPercentage = Float.fromInt(oversellPercentage);
         let divisionPercentage = Float.div(_oversellPercentage, Float.fromInt(100));
 
         let floatValue = Float.mul(_number, divisionPercentage);
         return Float.toInt(floatValue);
     };
-
-    func textToFloat(t : Text): Float {
-        var i : Float = 1;
-        var f : Float = 0;
-        var isDecimal : Bool = false;
-
-        for (c in t.chars()) {
-            if (Char.isDigit(c)) {
-                let charToNat : Nat64 = Nat64.fromNat(Nat32.toNat(Char.toNat32(c) -48));
-                let natToFloat : Float = Float.fromInt64(Int64.fromNat64(charToNat));
-                if (isDecimal) {
-                    let n : Float = natToFloat / Float.pow(10, i);
-                    f := f + n;
-                } else {
-                    f := f * 10 + natToFloat;
-                };
-                i := i + 1;
-                } else {
-                    if (Char.equal(c, '.') or Char.equal(c, ',')) {
-                        f := f / Float.pow(10, i); // Force decimal
-                        f := f * Float.pow(10, i); // Correction
-                        isDecimal := true;
-                        i := 1;
-                } else {
-                    return 0;
-                };
-            };
-        };
-        return f;
-  };
 
     func projectIsFullyFunded () : Bool { 
         var count = 0;
