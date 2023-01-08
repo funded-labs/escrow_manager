@@ -18,6 +18,8 @@ import Result       "mo:base/Result";
 import Text         "mo:base/Text";
 import Time         "mo:base/Time";
 import Trie         "mo:base/Trie";
+import Char         "mo:base/Char";
+import Nat32        "mo:base/Nat32";
 
 // import Backend      "canister:backend";
 
@@ -26,7 +28,7 @@ import Hex          "./hex";
 import Types        "./types";
 import Utils        "./utils";
 
-actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nfts: [Types.NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat) = this {
+actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nfts: [Types.NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat, oversellPercentage: Nat) = this {
 
     stable var nextSubAccount : Nat = 1_000_000_000;
 
@@ -50,6 +52,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         nfts: [NFTInfo];
         endTime : Time.Time;
         maxNFTsPerWallet : Nat;
+        oversellPercentage: Nat;
     }) {
         return {
             projectId = projectId;
@@ -57,6 +60,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
             nfts = nfts;
             endTime = endTime;
             maxNFTsPerWallet = maxNFTsPerWallet;
+            oversellPercentage = oversellPercentage;
         };
     };
 
@@ -192,7 +196,8 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
     };
 
     public func getNewAccountId (principal: Principal, tier: NFTInfoIndex) : async Result.Result<AccountIdText, Text> {
-        if (getNumberOfUncancelledSubaccounts(tier) >= nfts[tier].number) return #err("This project or project tier is fully funded (or almost there, so we are pausing new transfers for the time being).");
+        // Test if "nfts[tier].number + oversellNFTNumber(nfts[tier].number))" is working as expected
+        if (getNumberOfUncancelledSubaccounts(tier) >= nfts[tier].number + oversellNFTNumber(nfts[tier].number)) return #err("This project or project tier is fully funded (or almost there, so we are pausing new transfers for the time being).");
         if (endTime * 1_000_000 < Time.now()) return #err("Project is past crowdfund close date.");
         if (maxNFTsPerWallet > 0 and principalNumSubaccounts(principal) >= maxNFTsPerWallet) return #err("This project only allows each wallet to back the project " # Nat.toText(maxNFTsPerWallet) # " times. You have already attained this maximum.");
         func isEqPrincipal (p: Principal) : Bool { p == principal }; 
@@ -566,6 +571,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 priceE8S = t.priceE8S;
                 sold = 0;
                 openSubaccounts = 0;
+                oversellNumber = oversellNFTNumber(t.number);
             });
         };
         for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
@@ -578,6 +584,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                     priceE8S = curStats.priceE8S;
                     sold = curStats.sold + 1;
                     openSubaccounts = curStats.openSubaccounts; 
+                    oversellNumber = oversellNFTNumber(curStats.number);
                 });
             };
             if (status == #empty or status == #confirmed) {
@@ -587,6 +594,7 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                     priceE8S = curStats.priceE8S;
                     sold = curStats.sold;
                     openSubaccounts = curStats.openSubaccounts + 1; 
+                    oversellNumber = oversellNFTNumber(curStats.number);
                 });
             };
         };
@@ -695,6 +703,17 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
         };
         total;
     };
+    
+    // Results rounds to floor
+    func oversellNFTNumber(number: Nat) : Int {
+        let _number = Float.fromInt(number);
+        let _oversellPercentage = Float.fromInt(oversellPercentage);
+        let divisionPercentage = Float.div(_oversellPercentage, Float.fromInt(100));
+
+        let floatValue = Float.mul(_number, divisionPercentage);
+        return Float.toInt(floatValue);
+    };
+
     func projectIsFullyFunded () : Bool { 
         var count = 0;
         for (ss in Trie.iter<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex)>(accountInfo)) {
@@ -702,9 +721,10 @@ actor class EscrowCanister(projectId: Types.ProjectId, recipient: Principal, nft
                 count += 1;
             };
         };
+
         return count >= totalNFTNumber();
     };
-
+    
     func accIdTextKey(s : AccountIdText) : Trie.Key<AccountIdText> {
         { key = s; hash = Text.hash(s) };
     };
