@@ -36,7 +36,7 @@ actor class EscrowCanister(
     nfts: [Types.NFTInfo],
     endTime : Time.Time,
     maxNFTsPerWallet : Nat,
-    network: Types.Network,
+    btcNetwork: Types.Network,
     backendPrincipal: Text,
     oversellPercentage: Nat
 ) = this {
@@ -46,7 +46,12 @@ actor class EscrowCanister(
     // CONSTS
     let FEE : Nat64 = 10_000;
     let CROWDFUNDNFT_ACCOUNT_ICP = "8ac924e2eb6ad3d5c9fd6db905716aa04d949fe1a944442844214f59cf024e53";
-    let CROWDFUNDNFT_ACCOUNT_BTC = "";
+
+    let CROWDFUNDNFT_ACCOUNT_BTC = switch (btcNetwork) {
+        case (#Mainnet) { "bc1q6ajggjmtla644m9wxk58u4haeqzrxaa8p5g3pk" };
+        case (#Testnet) { "tb1qlecdyqtrvxgutaplzcmgwf2vkm8mva7tjnlmv0" };
+        case _ { "" };
+    };
 
     type AccountId = Types.AccountId; // Blob
     type AccountIdText = Types.AccountIdText;
@@ -71,7 +76,7 @@ actor class EscrowCanister(
     // The derivation path to use for ECDSA secp256k1.
     let DERIVATION_PATH : [[Nat8]] = [];
     // The ECDSA key name.
-    let KEY_NAME : Text = switch network {
+    let KEY_NAME : Text = switch btcNetwork {
         // For local development, we use a special test key with dfx.
         case (#Regtest) "dfx_test_key";
         // On the IC we're using a test ECDSA key.
@@ -79,12 +84,12 @@ actor class EscrowCanister(
     };
     /// Returns the UTXOs of the given Bitcoin address.
     public func get_utxos(address : BitcoinAddress) : async GetUtxosResponse {
-        await BitcoinApi.get_utxos(network, address)
+        await BitcoinApi.get_utxos(btcNetwork, address)
     };
     /// Returns the 100 fee percentiles measured in millisatoshi/byte.
     /// Percentiles are computed from the last 10,000 transactions (if available).
     public func get_current_fee_percentiles() : async [MillisatoshiPerByte] {
-        await BitcoinApi.get_current_fee_percentiles(network)
+        await BitcoinApi.get_current_fee_percentiles(btcNetwork)
     };
     public func get_p2pkh() : async BitcoinAddress {
         await get_p2pkh_address();
@@ -95,7 +100,7 @@ actor class EscrowCanister(
     };
     /// Returns the P2PKH address of this canister at a specific derivation path.
     func get_p2pkh_address() : async BitcoinAddress {
-        await BitcoinWallet.get_p2pkh_address(network, KEY_NAME, DERIVATION_PATH)
+        await BitcoinWallet.get_p2pkh_address(btcNetwork, KEY_NAME, DERIVATION_PATH)
     };
 
     public query func getMetadata () : async ({
@@ -300,7 +305,7 @@ actor class EscrowCanister(
             };
             case ("BTC") {
                 let subaccountNat8Arr : SubaccountNat8Arr = Utils.subBlobToSubNat8Arr(subaccountBlob);
-                accountIdText := await BitcoinWallet.get_p2pkh_address(NETWORK, KEY_NAME, [subaccountNat8Arr]);
+                accountIdText := await BitcoinWallet.get_p2pkh_address(btcNetwork, KEY_NAME, [subaccountNat8Arr]);
             };
             case _ {};
         };
@@ -311,7 +316,7 @@ actor class EscrowCanister(
         if (network == "ICP") {
             Utils.accountIdToHex(Account.getAccountId(getPrincipal(), Utils.defaultSubaccount()));
         } else {
-            await BitcoinWallet.get_p2pkh_address(NETWORK, KEY_NAME, []);
+            await BitcoinWallet.get_p2pkh_address(btcNetwork, KEY_NAME, []);
         };
 
     };
@@ -323,7 +328,7 @@ actor class EscrowCanister(
                 balance := (await Ledger.account_balance_dfx({ account = account })).e8s;
             };
             case ("BTC") {
-                balance := await BitcoinApi.get_balance(NETWORK, account);
+                balance := await BitcoinApi.get_balance(btcNetwork, account);
             };
             case _ {};
         };
@@ -448,9 +453,10 @@ actor class EscrowCanister(
 
     func cancelOpenAccountIds() : async () {
         if (emptyAccounts.size() == 0) return;
-        let cutoff = Time.now() - 1_000_000_000 * 60 * 2;
+        let cutoff = Time.now() - 1_000_000_000 * 60 * 20;
         let newEmptyAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
-        // If an account hasn't recieved a confirmation or cancellation, after 2 minutes it is set to cancelled.
+        // If an account hasn't recieved a confirmation or cancellation, after 20 minutes it is set to cancelled.
+        
         for (acc in emptyAccounts.vals()) {
             let accountIdText = acc.accountId;
             let time = acc.time;
@@ -472,15 +478,24 @@ actor class EscrowCanister(
 
     func checkConfirmedAccountsForFunds() : async () {
         if (confirmedAccounts.size() == 0) return;
-        let cutoff = Time.now() - 1_000_000_000 * 60 * 2;
+        
         let newConfirmedAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
-        // If an account hasn't recieved a confirmation or cancellation, after 2 minutes it is set to cancelled.
+
         for (acc in confirmedAccounts.vals()) {
             let accountIdText = acc.accountId;
             let time = acc.time;
             switch(Trie.get<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal)) {
                 case (?pssi) {
                     var balance : Nat64 = 0;
+
+                    // If an account hasn't recieved a confirmation or cancellation, after time it is set to cancelled.
+                    // ICP rounds - cutoff 2 minutes; BTC rounds - 24hours
+                    
+                    let cutoffDiff = switch (pssi.4) {
+                        case ("BTC") { 1_000_000_000 * 24 * 60 };
+                        case _ { 1_000_000_000 * 60 * 2 };
+                    };
+                    
                     try {
                         balance := await accountBalance(accountIdText, pssi.4);
                     } catch (e) { };
@@ -513,7 +528,7 @@ actor class EscrowCanister(
                             worked = true;
                         })
                     } else {
-                        if (time < cutoff) {
+                        if (Time.now() - time > cutoffDiff) {
                             accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal, ?(pssi.0, #cancelled, pssi.2, pssi.3, pssi.4)).0;
                         } else {
                             newConfirmedAccounts.add(acc);
@@ -713,7 +728,7 @@ actor class EscrowCanister(
             try {
                 switch (r.from) {
                     case (?from) {
-                        transactionId := await BitcoinWallet.send(NETWORK, [from], KEY_NAME, r.to, r.amount);
+                        transactionId := await BitcoinWallet.send(btcNetwork, [from], KEY_NAME, r.to, r.amount);
                     };
                     case null {error := true};
                 };
