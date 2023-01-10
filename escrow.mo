@@ -508,7 +508,7 @@ actor class EscrowCanister(
                     // ICP rounds - cutoff 2 minutes; BTC rounds - 2hours
                     
                     let cutoffDiff = switch (pssi.4) {
-                        case ("BTC") { 1_000_000_000 * 2 * 60 };
+                        case ("BTC") { 1_000_000_000 * 60 * 60 * 2 };
                         case _ { 1_000_000_000 * 60 * 2 };
                     };
                     
