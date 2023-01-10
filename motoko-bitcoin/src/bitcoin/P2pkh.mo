@@ -11,6 +11,7 @@ import Script "./Script";
 import Array "mo:base/Array";
 import Result "mo:base/Result";
 import Iter "mo:base/Iter";
+import Debug "mo:base/Debug";
 
 module {
   type PublicKey = Ecdsa.PublicKey;
@@ -88,6 +89,9 @@ module {
       };
       case (?(0x6f), ?publicKeyHash) {
         #ok {network = #Testnet; publicKeyHash = publicKeyHash}
+      };
+      case (?(0xc4), ?publicKeyHash) {
+        #ok {network = #Regtest; publicKeyHash = publicKeyHash}
       };
       case (?(networkId), ?_) {
         #err ("Unrecognized network id.")

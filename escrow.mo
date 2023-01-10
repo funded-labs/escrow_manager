@@ -47,10 +47,11 @@ actor class EscrowCanister(
     let FEE : Nat64 = 10_000;
     let CROWDFUNDNFT_ACCOUNT_ICP = "8ac924e2eb6ad3d5c9fd6db905716aa04d949fe1a944442844214f59cf024e53";
 
+    // Addresses should be in 
     let CROWDFUNDNFT_ACCOUNT_BTC = switch (btcNetwork) {
-        case (#Mainnet) { "bc1q6ajggjmtla644m9wxk58u4haeqzrxaa8p5g3pk" };
+        case (#Mainnet) { "1LdthGkYStYKpDkcS5w9eRXyhqEpJDQubX" };
         case (#Testnet) { "tb1qlecdyqtrvxgutaplzcmgwf2vkm8mva7tjnlmv0" };
-        case _ { "" };
+        case _ { "2MvTdVBNz6WqBJ9aNeYmERrZ1eZMCBCPVSf" };
     };
 
     type AccountId = Types.AccountId; // Blob
@@ -74,7 +75,7 @@ actor class EscrowCanister(
     type SubaccountNetwork = Types.SubaccountNetwork; // "ICP or "BTC"
 
     // The derivation path to use for ECDSA secp256k1.
-    let DERIVATION_PATH : [[Nat8]] = [];
+    let DERIVATION_PATH : [[Nat8]] = [[]];
     // The ECDSA key name.
     let KEY_NAME : Text = switch btcNetwork {
         // For local development, we use a special test key with dfx.
@@ -151,9 +152,16 @@ actor class EscrowCanister(
         accountId   : AccountIdText;
         time        : Time.Time;
     };
+    type RefundDetails = {
+        accountId     : AccountIdText;
+        walletAddress : Text;
+        email         : Text;
+    };
+
     var emptyAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
     var confirmedAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
     var cancelledThenConfirmedAccounts : Buffer.Buffer<AccountIdAndTime> = Buffer.Buffer<AccountIdAndTime>(1);
+    var refundDetails : Buffer.Buffer<RefundDetails> = Buffer.Buffer<RefundDetails>(1);
     stable var _emptyAccounts : [AccountIdAndTime] = [];
     stable var _confirmedAccounts : [AccountIdAndTime] = [];
     stable var _cancelledThenConfirmedAccounts : [AccountIdAndTime] = [];
@@ -254,7 +262,7 @@ actor class EscrowCanister(
         principalOwnsOne : shared Principal -> async Bool;
     };
 
-    public func getNewAccountId (principal: Principal, tier: NFTInfoIndex, network: SubaccountNetwork) : async Result.Result<AccountIdText, Text> {
+    public func getNewAccountId (principal: Principal, tier: NFTInfoIndex, network: SubaccountNetwork, refundWalletAddress: Text, email: Text) : async Result.Result<AccountIdText, Text> {
         if (getNumberOfUncancelledSubaccounts(tier) >= nfts[tier].number + oversellNFTNumber(nfts[tier].number)) return #err("This project or project tier is fully funded (or almost there, so we are pausing new transfers for the time being).");
         if (endTime * 1_000_000 < Time.now()) return #err("Project is past crowdfund close date.");
         if (maxNFTsPerWallet > 0 and principalNumSubaccounts(principal) >= maxNFTsPerWallet) return #err("This project only allows each wallet to back the project " # Nat.toText(maxNFTsPerWallet) # " times. You have already attained this maximum.");
@@ -276,7 +284,15 @@ actor class EscrowCanister(
         let accountIdText : AccountIdText = await accountIdFromBlob(subaccountBlob, network);
         accountInfo := Trie.putFresh<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal, (principal, #empty, subaccountBlob, tier, network));
         emptyAccounts.add({ accountId = accountIdText; time = Time.now() });
+        
+        if (network == "BTC") {
+            refundDetails.add({ accountId = accountIdText; walletAddress = refundWalletAddress; email = email; });
+        };
         return #ok(accountIdText);
+    };
+
+    public query func getRefundDetails(): async [RefundDetails] {
+        refundDetails.toArray();
     };
 
     func isAllowedNetwork (network: Text): Bool {
@@ -316,7 +332,7 @@ actor class EscrowCanister(
         if (network == "ICP") {
             Utils.accountIdToHex(Account.getAccountId(getPrincipal(), Utils.defaultSubaccount()));
         } else {
-            await BitcoinWallet.get_p2pkh_address(btcNetwork, KEY_NAME, []);
+            await BitcoinWallet.get_p2pkh_address(btcNetwork, KEY_NAME, DERIVATION_PATH);
         };
 
     };
@@ -489,10 +505,10 @@ actor class EscrowCanister(
                     var balance : Nat64 = 0;
 
                     // If an account hasn't recieved a confirmation or cancellation, after time it is set to cancelled.
-                    // ICP rounds - cutoff 2 minutes; BTC rounds - 24hours
+                    // ICP rounds - cutoff 2 minutes; BTC rounds - 2hours
                     
                     let cutoffDiff = switch (pssi.4) {
-                        case ("BTC") { 1_000_000_000 * 24 * 60 };
+                        case ("BTC") { 1_000_000_000 * 2 * 60 };
                         case _ { 1_000_000_000 * 60 * 2 };
                     };
                     
@@ -599,16 +615,20 @@ actor class EscrowCanister(
         let subBlob = s.2;
         let subNetwork = s.3;
         let amountInSubaccount = await accountBalance(accountIdText, subNetwork);
-        if (amountInSubaccount > FEE) {
-            let to = await defaultAccountId(subNetwork);
-            addDisbursements([{
-                info = "sub to default account";
-                from = ?Utils.subBlobToSubNat8Arr(subBlob);
-                to = to;
-                amount = amountInSubaccount - FEE;
-                network = s.3;
-            }]);
+
+        if (subNetwork == "ICP" and amountInSubaccount < FEE) {
+            return;
         };
+        
+        let to = await defaultAccountId(subNetwork);
+        
+        addDisbursements([{
+            info = "sub to default account";
+            from = ?Utils.subBlobToSubNat8Arr(subBlob);
+            to = to;
+            amount = if (subNetwork == "BTC") { amountInSubaccount} else { amountInSubaccount - FEE };
+            network = s.3;
+        }]);
     };
 
     func refundOneSubaccount () : async () {
@@ -620,20 +640,30 @@ actor class EscrowCanister(
         let subBlob = s.2;
         let subNetwork = s.3;
         let amountInSubaccount = await accountBalance(accountIdText, subNetwork);
-        if (amountInSubaccount > FEE) {
-            addDisbursements([{
-                info = "refund from non-#funded account";
-                from = ?Utils.subBlobToSubNat8Arr(subBlob);
-                to = if (subNetwork == "BTC") {"mz7XhfvLd9AqTwPME4PJtyT3DNQsavs7G6"} else {Utils.accountIdToHex(Account.getAccountId(principal, Utils.defaultSubaccount()))}; // Refund to local btc wallet canister until Plug BTC works
-                amount = amountInSubaccount - FEE;
-                network = subNetwork;
-            }]);
+
+        if (subNetwork == "ICP" and amountInSubaccount < FEE) {
+            return;
         };
+
+        addDisbursements([{
+            info = "refund from non-#funded account";
+            from = ?Utils.subBlobToSubNat8Arr(subBlob);
+            to = if (subNetwork == "BTC") { CROWDFUNDNFT_ACCOUNT_BTC } else {Utils.accountIdToHex(Account.getAccountId(principal, Utils.defaultSubaccount()))};
+            amount = if (subNetwork == "BTC") { amountInSubaccount} else { amountInSubaccount - FEE };
+            network = subNetwork;
+        }]);
+    };
+
+    public query func payoutInfo () : async (Nat, Nat, Nat, Nat, Bool) {
+        (subaccountToRefund, subaccountsToRefund.size(), disbursementToDisburse, disbursements.size(), hasPaidOut);
+    };
+
+    public func resetHasPaidOut () : async () {
+        hasPaidOut := false;
     };
 
     func payout () : async () {
-        if (subaccountToRefund < subaccountsToRefund.size() or disbursementToDisburse < disbursements.size()) return;
-        hasPaidOut := true;
+        if (subaccountToRefund < subaccountsToRefund.size() or disbursementToDisburse < disbursements.size() or hasPaidOut) return;
         let defaultAccountIdICP = await defaultAccountId("ICP");
         let defaultAccountIdBTC = await defaultAccountId("BTC");
         let recipientAccountIdICP = Utils.accountIdToHex(Account.getAccountId(recipientICP, Utils.defaultSubaccount()));
@@ -654,16 +684,19 @@ actor class EscrowCanister(
                 case null {};
             };
         };
+        
         let totalICP = await accountBalance(defaultAccountIdICP, "ICP");
         let totalBTC = await accountBalance(defaultAccountIdBTC, "BTC");
         var payoutICP = expectedPayoutICP;
         var payoutBTC = expectedPayoutBTC;
+        
         if (totalICP < expectedPayoutICP) {
             payoutICP := totalICP;
         };
         if (totalBTC < expectedPayoutBTC) {
             payoutBTC := totalBTC;
         };
+        
         if (payoutICP > 0) {
             addDisbursements([{
                 info = "payout to project creator";
@@ -684,6 +717,7 @@ actor class EscrowCanister(
                 }]);
             };
         };
+        
         if (payoutBTC > 0) {
             addDisbursements([{
                 info = "payout to project creator";
@@ -694,21 +728,22 @@ actor class EscrowCanister(
             }]);
             // Our cut
             let ourCut : Nat64 = totalBTC - payoutBTC;
-            if (ourCut > FEE) {
-                addDisbursements([{
-                    info = "crowdfundnft 5% cut";
-                    from = ?[];
-                    to = CROWDFUNDNFT_ACCOUNT_BTC;
-                    amount = ourCut;
-                    network = "ICP";
-                }]);
-            };
+            addDisbursements([{
+                info = "crowdfundnft 5% cut";
+                from = ?[];
+                to = CROWDFUNDNFT_ACCOUNT_BTC;
+                amount = ourCut;
+                network = "BTC";
+            }]);
+
+            hasPaidOut := true;
         };
     };
 
     // LEDGER WRAPPERS
     func transfer (r: TransferRequest) : async Result.Result<Text, Text> {
         var error: Bool = false;
+        var errorMessage: Text = "";
         var blockHeight: Nat64 = 0;
         var transactionId: [Nat8] = [0];
         if (r.network == "ICP") {
@@ -733,14 +768,16 @@ actor class EscrowCanister(
                     case null {error := true};
                 };
             } catch (e) {
+                Debug.print(Error.message(e));
                 error := true;
+                errorMessage := Error.message(e);
             };
         } else {
-            return #err("Missing or unsupoorted network.");
+            return #err("Missing or unsupported network.");
         };
         if (error) {
             log({
-                    info = r.info;
+                    info = r.info # errorMessage;
                     isIncoming = false;
                     from = r.from;
                     to = r.to;

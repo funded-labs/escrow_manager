@@ -58,8 +58,8 @@ module {
   /// given destination, where the source of the funds is the canister itself
   /// at the given derivation path.
   public func send(network : Network, derivation_path : [[Nat8]], key_name : Text, dst_address : BitcoinAddress, amount : Satoshi) : async [Nat8] {
-    // Get fee percentiles from previous transactions to estimate our own fee.
-    let fee_percentiles = await BitcoinApi.get_current_fee_percentiles(network);
+  // Get fee percentiles from previous transactions to estimate our own fee.
+  let fee_percentiles = await BitcoinApi.get_current_fee_percentiles(network);
 
     let fee_per_byte : MillisatoshiPerByte = if(fee_percentiles.size() == 0) {
         // There are no fee percentiles. This case can only happen on a regtest
@@ -121,8 +121,13 @@ public func build_transaction(
     Debug.print("Building transaction...");
     var total_fee : Nat = 0;
     loop {
-        let transaction =
-            Utils.get_ok_except(Bitcoin.buildTransaction(2, own_utxos, [(#p2pkh dst_address, amount)], #p2pkh own_address, Nat64.fromNat(total_fee)), "Error building transaction.");
+        let transaction = switch(Bitcoin.buildTransaction(2, own_utxos, [(#p2pkh dst_address, (amount - Nat64.fromNat(total_fee)))], #p2pkh own_address, Nat64.fromNat(total_fee))) {
+          case (#ok value){ value };
+          case (#err error) {
+            Debug.print(error);
+            Debug.trap(error);
+          };
+        };
 
         // Sign the transaction. In this case, we only care about the size
         // of the signed transaction, so we use a mock signer here for efficiency.

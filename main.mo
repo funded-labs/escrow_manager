@@ -65,7 +65,8 @@ actor EscrowManager {
         let canister_id = Principal.fromText(canister);
         let newControllers = [
             Principal.fromText("3fhg4-qiaaa-aaaak-aajiq-cai"),
-            Principal.fromText("xohn2-daaaa-aaaak-aadvq-cai")
+            Principal.fromText("xohn2-daaaa-aaaak-aadvq-cai"),
+            Principal.fromText("is7gy-jgfpp-4fnpe-da4au-xbb5e-iflz6-kuqge-wef4p-fpeo4-gftlc-mae"),
         ];
         await ManagementCanister.update_settings({ canister_id = canister_id; settings = {
             controllers = ?newControllers;
