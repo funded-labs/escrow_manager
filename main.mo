@@ -48,7 +48,7 @@ actor EscrowManager {
     // canister's code due to a glitch, we use this function to temporarily take
     // control of the escrow canister.
     // TODO: Remove this function.
-    public func takeover (canister : Text) : async definite_canister_settings { 
+    public func takeover (canister : Text) : async definite_canister_settings {
         let ManagementCanister = actor "aaaaa-aa" : actor {
             canister_status : shared { canister_id : canister_id } -> async {
                 status : { #running; #stopping; #stopped };
@@ -65,7 +65,8 @@ actor EscrowManager {
         let canister_id = Principal.fromText(canister);
         let newControllers = [
             Principal.fromText("3fhg4-qiaaa-aaaak-aajiq-cai"),
-            Principal.fromText("xohn2-daaaa-aaaak-aadvq-cai") 
+            Principal.fromText("xohn2-daaaa-aaaak-aadvq-cai"),
+            Principal.fromText("is7gy-jgfpp-4fnpe-da4au-xbb5e-iflz6-kuqge-wef4p-fpeo4-gftlc-mae"),
         ];
         await ManagementCanister.update_settings({ canister_id = canister_id; settings = {
             controllers = ?newControllers;
@@ -97,7 +98,17 @@ actor EscrowManager {
     };
 
     // TODO: Remove self as controller of created escrow canister to turn the canister into true "black hole" canister.
-    public shared(msg) func createEscrowCanister (p: ProjectId, recipient: Principal, nfts: [NFTInfo], endTime : Time.Time, maxNFTsPerWallet : Nat, oversellPercentage: Nat) : async () {
+    public shared(msg) func createEscrowCanister (
+        p: ProjectId,
+        recipientICP: Principal,
+        recipientBTC: Text,
+        nfts: [NFTInfo],
+        endTime : Time.Time,
+        maxNFTsPerWallet : Nat,
+        network : Types.Network,
+        backendPrincipal: Text,
+        oversellPercentage: Nat
+    ) : async () {
         assert(isAdmin(msg.caller));
         switch (getProjectEscrowCanister(p)) {
             case (?canister) { throw Error.reject("Project already has an escrow canister: " # Principal.toText(canister)); };
@@ -106,7 +117,7 @@ actor EscrowManager {
                     throw Error.reject("Oversell percentage can't exceed " # Nat.toText(maxOversellPercentage) # "%");
                 } else {
                 Cycles.add(1000000000000);
-                let canister = await Escrow.EscrowCanister(p, recipient, nfts, endTime, maxNFTsPerWallet, oversellPercentage);
+                let canister = await Escrow.EscrowCanister(p, recipientICP, recipientBTC, nfts, endTime, maxNFTsPerWallet, network, backendPrincipal, oversellPercentage);
                 escrowCanisters := Trie.putFresh<ProjectIdText, CanisterId>(escrowCanisters, projectIdKey(p), Text.equal, Principal.fromActor(canister));
                 };
             };
@@ -117,9 +128,9 @@ actor EscrowManager {
         assert(isAdmin(caller));
         maxOversellPercentage := percentage;
     };
-    
+
     public query func getMaxOversellPercentage(): async Nat {
-        maxOversellPercentage
+        maxOversellPercentage;
     };
 
     func getProjectEscrowCanister (p: ProjectId) : ?CanisterId {
@@ -135,7 +146,7 @@ actor EscrowManager {
             case (null) { throw Error.reject("Project has no escrow canister"); };
         };
     };
-    
+
     // helpers
 
     func projectIdKey (p: ProjectId) : Trie.Key<ProjectIdText> {
