@@ -530,7 +530,12 @@ actor class EscrowCanister(
                         };
                         case _ {Nat64.fromNat(0)};
                     };
-                    if (balance >= price) {
+
+                    let _balance = Float.fromInt(Nat64.toNat(balance));
+                    let _price = Float.fromInt(Nat64.toNat(price));
+                    let minBalance = Float.mul(_price, 0.9);
+
+                    if (_balance >= minBalance) {
                         accountInfo := Trie.replace<AccountIdText, (Principal, SubaccountStatus, SubaccountBlob, NFTInfoIndex, SubaccountNetwork)>(accountInfo, accIdTextKey(accountIdText), Text.equal, ?(pssi.0, #funded, pssi.2, pssi.3, pssi.4)).0;
                         log({
                             info = "transfer into the escrow";
